@@ -1,0 +1,22 @@
+{
+  "name": "team-todo-backend",
+  "type": "service-worker",
+  "main": "src/index.ts",
+  "env": {
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production"
+      }
+    }
+  },
+  "build": {
+    "command": "npm run build",
+    "cwd": "./"
+  },
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

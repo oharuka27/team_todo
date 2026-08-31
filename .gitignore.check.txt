@@ -1,0 +1,19 @@
+=== .gitignore が効いているか確認 ===
+
+.gitignore の対象外になるべきファイル:
+- backend/node_modules/ ✓
+- backend/dist/ ✓
+- backend/.wrangler/ ✓
+- frontend/node_modules/ ✓
+- frontend/dist/ ✓
+- .env.local ✓
+- .DS_Store ✓
+
+ソースコードとして含まれるべきファイル:
+- backend/src/index.ts ✓
+- backend/package.json ✓
+- backend/wrangler.jsonc ✓
+- backend/migrations/*.sql ✓
+- frontend/src/** ✓
+- frontend/package.json ✓
+- README.md ✓

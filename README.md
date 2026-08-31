@@ -1,0 +1,205 @@
+# チーム ToDoアプリ
+
+チームでToDoを共有できるリアルタイム更新対応のプロジェクト管理アプリです。
+
+## 🎯 機能
+
+### フロントエンド
+- **プロジェクト管理**: プロジェクトの作成・一覧表示・選択
+- **カンバンボード**: 3列レイアウト（未着手/着手中/完了）でToDoを管理
+- **列のカスタマイズ**: 各列のタイトルをユーザーが編集可能
+- **ToDoの追加・削除**: リアルタイムな反映
+
+### バックエンド
+- **リアルタイム同期**: WebSocketによる複数ユーザーの同時接続対応
+- **API驚エンドポイント**: CRUD操作用のRESTful API
+- **CloudFlare Workers**: エッジでの実行による低レイテンシー
+- **データ永続化**: SQLiteによるデータ管理
+
+## 📁 プロジェクト構成
+
+```
+team_todo/
+├── frontend/                    # React + TypeScript + Vite
+│   ├── src/
+│   │   ├── pages/              # ページコンポーネント
+│   │   │   ├── HomePage.tsx    # プロジェクト一覧・作成
+│   │   │   └── ProjectPage.tsx # カンバンボード
+│   │   ├── styles/             # CSSファイル
+│   │   ├── App.tsx             # メインコンポーネント
+│   │   └── main.tsx            # エントリーポイント
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── vite.config.ts
+├── backend/                     # CloudFlare Workers + Hono
+│   ├── src/
+│   │   └── index.ts            # バックエンド実装
+│   ├── migrations/
+│   │   └── 0001_create_todos.sql
+│   ├── package.json
+│   └── wrangler.jsonc
+└── README.md
+```
+
+## 🚀 セットアップ
+
+### 前提条件
+- Node.js 18以上
+- npm または pnpm
+
+### フロントエンド
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+開発サーバーは `http://localhost:5173` で起動します。
+
+### バックエンド
+
+```bash
+cd backend
+npm install
+npm run dev
+```
+
+デバッグサーバーは `http://localhost:8787` で起動します。
+
+## 📝 使用方法
+
+### プロジェクト作成
+1. ホームページのフォームでプロジェクト名を入力
+2. 「作成」ボタンをクリック
+3. プロジェクトが一覧に追加される
+
+### ToDoの管理
+1. プロジェクトをクリックして詳細ページに移動
+2. 各列に新しいToDoを追加
+3. ToDoをドラッグして別の列に移動
+4. ✏️ボタンで列のタイトルを編集
+
+### リアルタイム同期
+- 複数ユーザーがアクセスしている場合、自動的に最新の状態に同期されます
+- WebSocketを使用してリアルタイムな更新を実現
+
+## 🔧 API エンドポイント
+
+### プロジェクトAPI
+
+```
+POST   /api/projects              # プロジェクト作成
+GET    /api/projects              # プロジェクト一覧取得
+GET    /api/projects/:id          # プロジェクト詳細取得
+PUT    /api/projects/:id          # プロジェクト更新
+```
+
+### ToDoAPI
+
+```
+POST   /api/todos                 # ToDoアイテム作成
+GET    /api/projects/:id/todos    # プロジェクトのToDoリスト取得
+PUT    /api/todos/:id             # ToDoアイテム更新
+DELETE /api/todos/:id             # ToDoアイテム削除
+```
+
+### カラムAPI
+
+```
+GET    /api/projects/:id/columns  # プロジェクトの列一覧取得
+PUT    /api/columns/:id           # 列のタイトル更新
+```
+
+## 🗄️ データベーススキーマ
+
+### projects テーブル
+- `id`: プロジェクトID（主キー）
+- `name`: プロジェクト名
+- `description`: 説明
+- `owner_id`: オーナーユーザーID
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
+
+### todos テーブル
+- `id`: ToDoアイテムID（主キー）
+- `project_id`: プロジェクトID（外部キー）
+- `title`: タイトル
+- `description`: 説明
+- `status`: ステータス
+- `column_name`: 列の名前
+- `user_id`: 作成ユーザーID
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
+
+### board_columns テーブル
+- `id`: 列ID（主キー）
+- `project_id`: プロジェクトID（外部キー）
+- `title`: 列のタイトル
+- `position`: 表示位置
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
+
+## 🚢 CloudFlareへのデプロイ
+
+```bash
+cd backend
+npm run deploy
+```
+
+フロントエンドは CloudFlare Pages や Vercel などにデプロイできます。
+
+```bash
+cd frontend
+npm run build
+# 生成された dist ディレクトリをデプロイ
+```
+
+## 🤝 マルチユーザー対応
+
+- WebSocket接続によるリアルタイム同期
+- 複数ユーザーの同時編集に対応
+- 各ユーザーにはローカルストレージで自動的にIDを割り当て
+
+## 📦 依存パッケージ
+
+### フロントエンド
+- React 18+
+- TypeScript 5+
+- Vite 5+
+
+### バックエンド
+- Hono 4+
+- @hono/cors
+- uuid
+- Wrangler 3+ (CloudFlare Workers CLI)
+
+## 📄 ライセンス
+
+MIT License
+
+## 🐛 トラブルシューティング
+
+### フロントエンドが起動しない
+```bash
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+npm run dev
+```
+
+### バックエンド接続エラー
+- CloudFlareにデプロイしていない場合、バックエンドはモック データを使用します
+- 本番環境では環境変数を設定して、実際のバックエンドURLを指定します
+
+## 📚 参考資料
+
+- [Vite](https://vite.dev/)
+- [React](https://react.dev/)
+- [Hono](https://hono.dev/)
+- [CloudFlare Workers](https://workers.cloudflare.com/)
+- [SQLite](https://www.sqlite.org/)
+
+---
+
+**開発版**: このアプリは現在開発中です。新機能や改善が随時追加されます。
