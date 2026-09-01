@@ -1,239 +1,85 @@
-import { useState, useEffect } from 'react'
-import { apiClient, type TodoItem, type BoardColumn } from '../services/api'
+import { useEffect, useMemo, useState } from 'react'
+import { apiClient, type BoardColumn, type Project, type TodoItem } from '../services/api'
 import '../styles/ProjectPage.css'
 
-interface ProjectPageProps {
-  projectId: string
-  userId: string
-  onBack: () => void
-}
+interface ProjectPageProps { project: Project; userId: string }
+const defaultColumns = (): BoardColumn[] => [
+  { id: 'todo', title: 'To Do', position: 0 }, { id: 'progress', title: 'In Progress', position: 1 },
+  { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
+]
+const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 
-export default function ProjectPage({ projectId, userId, onBack }: ProjectPageProps) {
+export default function ProjectPage({ project, userId }: ProjectPageProps) {
   const [todos, setTodos] = useState<TodoItem[]>([])
-  const [columns, setColumns] = useState<BoardColumn[]>([])
+  const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
+  const [addingTo, setAddingTo] = useState<string | null>(null)
   const [newTodoText, setNewTodoText] = useState('')
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
   const [editingColumnText, setEditingColumnText] = useState('')
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchData()
-  }, [projectId])
+    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
+      .then(([todoData, columnData]) => { setTodos(todoData); setColumns(columnData.length ? columnData : defaultColumns()) })
+      .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('オフラインモードで表示しています') })
+      .finally(() => setLoading(false))
+  }, [project.id])
 
-  const fetchData = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const [todosData, columnsData] = await Promise.all([
-        apiClient.getTodos(projectId),
-        apiClient.getColumns(projectId),
-      ])
-      setTodos(todosData)
-      setColumns(columnsData.length > 0 ? columnsData : getDefaultColumns())
-    } catch (err) {
-      console.error('Failed to fetch data:', err)
-      setError('データの読み込みに失敗しました')
-      // Use mock data as fallback
-      setTodos([])
-      setColumns(getDefaultColumns())
-    } finally {
-      setLoading(false)
-    }
-  }
+  const filteredTodos = useMemo(() => todos.filter((todo) => todo.title.toLowerCase().includes(query.toLowerCase())), [todos, query])
+  const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
 
-  const getDefaultColumns = (): BoardColumn[] => [
-    { id: '1', title: '未着手', position: 0 },
-    { id: '2', title: '着手中', position: 1 },
-    { id: '3', title: '完了', position: 2 },
-  ]
-
-  const handleAddTodo = async (columnTitle: string) => {
+  const addTodo = async (columnTitle: string) => {
     if (!newTodoText.trim()) return
-
-    try {
-      const newTodo = await apiClient.createTodo(
-        projectId,
-        newTodoText,
-        columnTitle,
-        userId
-      )
-      setTodos([...todos, newTodo])
-      setNewTodoText('')
-    } catch (err) {
-      console.error('Failed to create todo:', err)
-      // Fallback to mock todo
-      const mockTodo: TodoItem = {
-        id: Math.random().toString(36).slice(2, 9),
-        project_id: projectId,
-        title: newTodoText,
-        status: 'not_started',
-        column_name: columnTitle,
-        user_id: userId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }
-      setTodos([...todos, mockTodo])
-      setNewTodoText('')
-    }
+    const title = newTodoText.trim(); setNewTodoText(''); setAddingTo(null)
+    try { const created = await apiClient.createTodo(project.id, title, columnTitle, userId); setTodos((items) => [...items, created]) }
+    catch { const now = new Date().toISOString(); setTodos((items) => [...items, { id: crypto.randomUUID(), project_id: project.id, title, status: 'not_started', column_name: columnTitle, user_id: userId, created_at: now, updated_at: now }]) }
   }
-
-  const handleDeleteTodo = async (todoId: string) => {
-    try {
-      await apiClient.deleteTodo(todoId)
-      setTodos(todos.filter((t) => t.id !== todoId))
-    } catch (err) {
-      console.error('Failed to delete todo:', err)
-      // Still remove from UI as fallback
-      setTodos(todos.filter((t) => t.id !== todoId))
-    }
+  const deleteTodo = async (id: string) => { setTodos((items) => items.filter((todo) => todo.id !== id)); try { await apiClient.deleteTodo(id) } catch { /* local fallback */ } }
+  const moveTodo = async (id: string, columnName: string) => {
+    const previous = todos; setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_name: columnName } : todo))
+    try { await apiClient.updateTodo(id, { column_name: columnName }) } catch { setTodos(previous) }
   }
-
-  const handleStartEditColumn = (columnId: string, currentTitle: string) => {
-    setEditingColumnId(columnId)
-    setEditingColumnText(currentTitle)
-  }
-
-  const handleSaveColumnTitle = async (columnId: string) => {
-    if (!editingColumnText.trim()) return
-
-    try {
-      await apiClient.updateColumn(columnId, editingColumnText)
-      const oldTitle = columns.find((c) => c.id === columnId)?.title
-      setColumns(
-        columns.map((col) =>
-          col.id === columnId ? { ...col, title: editingColumnText } : col
-        )
-      )
-      if (oldTitle) {
-        setTodos(
-          todos.map((todo) =>
-            todo.column_name === oldTitle
-              ? { ...todo, column_name: editingColumnText }
-              : todo
-          )
-        )
-      }
-    } catch (err) {
-      console.error('Failed to update column:', err)
-      // Still update UI as fallback
-      const oldTitle = columns.find((c) => c.id === columnId)?.title
-      setColumns(
-        columns.map((col) =>
-          col.id === columnId ? { ...col, title: editingColumnText } : col
-        )
-      )
-      if (oldTitle) {
-        setTodos(
-          todos.map((todo) =>
-            todo.column_name === oldTitle
-              ? { ...todo, column_name: editingColumnText }
-              : todo
-          )
-        )
-      }
-    }
-    setEditingColumnId(null)
-  }
-
-  const columnsTodos = (columnTitle: string) =>
-    todos.filter((t) => t.column_name === columnTitle)
-
-  if (loading) {
-    return (
-      <div className="project-page">
-        <header className="project-header">
-          <button onClick={onBack} className="btn-back">← 戻る</button>
-          <h1>読み込み中...</h1>
-        </header>
-      </div>
-    )
+  const saveColumn = async (column: BoardColumn) => {
+    const title = editingColumnText.trim(); if (!title) return
+    const oldTitle = column.title
+    setColumns((items) => items.map((item) => item.id === column.id ? { ...item, title } : item)); setTodos((items) => items.map((todo) => todo.column_name === oldTitle ? { ...todo, column_name: title } : todo)); setEditingColumnId(null)
+    try { await apiClient.updateColumn(column.id, title) } catch { /* local fallback */ }
   }
 
   return (
-    <div className="project-page">
-      <header className="project-header">
-        <button onClick={onBack} className="btn-back">← 戻る</button>
-        <h1>プロジェクト: {projectId}</h1>
+    <section className="board-page">
+      <header className="board-header">
+        <div><span className="breadcrumb">プロジェクト / {project.name}</span><h1>{project.name}</h1>{project.description && <p>{project.description}</p>}</div>
+        <div className="member-stack"><span>YT</span><span>KM</span><button aria-label="メンバーを追加">＋</button></div>
       </header>
-
-      {error && <div className="error-message">{error}</div>}
-
-      <div className="kanban-board">
-        {columns.map((column) => (
-          <div key={column.id} className="kanban-column">
-            <div className="column-header">
-              {editingColumnId === column.id ? (
-                <div className="edit-column">
-                  <input
-                    type="text"
-                    value={editingColumnText}
-                    onChange={(e) => setEditingColumnText(e.target.value)}
-                    autoFocus
-                  />
-                  <button
-                    onClick={() => handleSaveColumnTitle(column.id)}
-                    className="btn-save"
-                  >
-                    保存
-                  </button>
-                  <button
-                    onClick={() => setEditingColumnId(null)}
-                    className="btn-cancel"
-                  >
-                    キャンセル
-                  </button>
-                </div>
-              ) : (
-                <div className="column-title-display">
-                  <h2>{column.title}</h2>
-                  <button
-                    onClick={() => handleStartEditColumn(column.id, column.title)}
-                    className="btn-edit"
-                    title="列のタイトルを編集"
-                  >
-                    ✏️
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="todo-list">
-              {columnsTodos(column.title).map((todo) => (
-                <div key={todo.id} className="todo-card">
-                  <h4>{todo.title}</h4>
-                  {todo.description && <p>{todo.description}</p>}
-                  <button
-                    onClick={() => handleDeleteTodo(todo.id)}
-                    className="btn-delete"
-                    title="削除"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                handleAddTodo(column.title)
-              }}
-              className="add-todo-form"
-            >
-              <input
-                type="text"
-                placeholder={`${column.title} に追加...`}
-                value={newTodoText}
-                onChange={(e) => setNewTodoText(e.target.value)}
-              />
-              <button type="submit" className="btn-add">
-                追加
-              </button>
-            </form>
-          </div>
-        ))}
+      <div className="board-toolbar">
+        <div className="search-box"><SearchIcon/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ボードを検索" /></div>
+        <div className="board-label"><span className="board-dot"/> ボード</div>{notice && <span className="offline-notice">{notice}</span>}
       </div>
-    </div>
+      {loading ? <div className="board-loading"><span/><p>ボードを読み込んでいます…</p></div> : (
+        <div className="kanban-board">
+          {columns.map((column, index) => (
+            <article className={`kanban-column column-${index % 4}`} key={column.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { const id = e.dataTransfer.getData('todo-id'); if (id) moveTodo(id, column.title) }}>
+              <div className="column-header">
+                {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column.title).length}</b></button>}
+                <button className="more-button" aria-label="列のメニュー">•••</button>
+              </div>
+              <div className="todo-list">
+                {columnTodos(column.title).map((todo) => (
+                  <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
+                    <button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button><p>{todo.title}</p>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar">{userId.slice(-1).toUpperCase()}</span></div>
+                  </div>
+                ))}
+                {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
+              </div>
+              {addingTo === column.id ? <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}><textarea autoFocus value={newTodoText} onChange={(e) => setNewTodoText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setAddingTo(null) }} placeholder="タスク名を入力"/><div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div></form> : <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span>＋</span> タスクを追加</button>}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }

@@ -72,9 +72,10 @@ app.post('/api/projects', async (c) => {
 
   // Initialize default columns
   const defaultColumns = [
-    { title: '未着手', position: 0 },
-    { title: '着手中', position: 1 },
-    { title: '完了', position: 2 },
+    { title: 'To Do', position: 0 },
+    { title: 'In Progress', position: 1 },
+    { title: 'In Review', position: 2 },
+    { title: 'Done', position: 3 },
   ];
 
   defaultColumns.forEach((col, index) => {

@@ -1,42 +1,85 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
-import HomePage from './pages/HomePage'
 import ProjectPage from './pages/ProjectPage'
+import { apiClient, type Project } from './services/api'
 
-type Page = 'home' | 'project'
-
-interface AppState {
-  page: Page
-  selectedProjectId?: string
-}
+const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+)
 
 function App() {
-  const [state, setState] = useState<AppState>({ page: 'home' })
   const [userId] = useState(() => localStorage.getItem('userId') || `user_${Math.random().toString(36).slice(2, 9)}`)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [isCreateOpen, setIsCreateOpen] = useState(false)
+  const [newProjectName, setNewProjectName] = useState('')
+  const [newProjectDescription, setNewProjectDescription] = useState('')
+  const [isCreating, setIsCreating] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
+    apiClient.getProjects(userId).then((data) => {
+      setProjects(data)
+      setSelectedProjectId((current) => current ?? data[0]?.id ?? null)
+    }).catch(() => {
+      const demo: Project = { id: 'demo-project', name: 'チームプロジェクト', description: 'チームのタスク管理', owner_id: userId, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      setProjects([demo]); setSelectedProjectId(demo.id)
+    })
   }, [userId])
 
-  const handleSelectProject = (projectId: string) => {
-    setState({ page: 'project', selectedProjectId: projectId })
+  const createProject = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!newProjectName.trim()) return
+    setIsCreating(true)
+    try {
+      const created = await apiClient.createProject(newProjectName.trim(), newProjectDescription.trim() || undefined, userId)
+      setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
+    } catch {
+      const now = new Date().toISOString()
+      const created: Project = { id: crypto.randomUUID(), name: newProjectName.trim(), description: newProjectDescription.trim(), owner_id: userId, created_at: now, updated_at: now }
+      setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
+    } finally {
+      setIsCreating(false); setNewProjectName(''); setNewProjectDescription(''); setIsCreateOpen(false)
+    }
   }
 
-  const handleBackToHome = () => {
-    setState({ page: 'home' })
-  }
+  const selectedProject = projects.find((project) => project.id === selectedProjectId)
 
   return (
-    <div className="app">
-      {state.page === 'home' && (
-        <HomePage userId={userId} onSelectProject={handleSelectProject} />
-      )}
-      {state.page === 'project' && state.selectedProjectId && (
-        <ProjectPage 
-          projectId={state.selectedProjectId} 
-          userId={userId}
-          onBack={handleBackToHome}
-        />
+    <div className="workspace">
+      <aside className="sidebar">
+        <div className="brand"><span className="brand-mark"><Icon size={22}><path d="M9 11l2 2 4-4"/><path d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></Icon></span><span>Team Todo</span></div>
+        <div className="sidebar-section">
+          <div className="sidebar-heading"><span>プロジェクト</span><span className="project-count">{projects.length}</span></div>
+          <nav className="project-list" aria-label="プロジェクト一覧">
+            {projects.map((project, index) => (
+              <button key={project.id} className={`project-item ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(project.id)}>
+                <span className={`project-icon project-icon-${index % 4}`}>{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
+              </button>
+            ))}
+          </nav>
+          <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
+        </div>
+        <div className="sidebar-footer"><span className="avatar">{userId.slice(-2).toUpperCase()}</span><div><strong>マイワークスペース</strong><small>オンライン</small></div></div>
+      </aside>
+
+      <main className="main-area">
+        {selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} /> : (
+          <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
+        )}
+      </main>
+
+      {isCreateOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setIsCreateOpen(false)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="create-project-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div><span className="eyebrow">NEW PROJECT</span><h2 id="create-project-title">プロジェクトを追加</h2></div><button className="icon-button" onClick={() => setIsCreateOpen(false)} aria-label="閉じる">×</button></div>
+            <form onSubmit={createProject}>
+              <label>プロジェクト名<input autoFocus value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="例：Webサイトリニューアル" /></label>
+              <label>説明 <span>任意</span><textarea value={newProjectDescription} onChange={(e) => setNewProjectDescription(e.target.value)} placeholder="プロジェクトの概要を入力" rows={3} /></label>
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : 'プロジェクトを作成'}</button></div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   )
