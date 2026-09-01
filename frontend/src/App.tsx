@@ -13,7 +13,6 @@ function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
-  const [newProjectDescription, setNewProjectDescription] = useState('')
   const [isCreating, setIsCreating] = useState(false)
 
   useEffect(() => {
@@ -22,8 +21,8 @@ function App() {
       setProjects(data)
       setSelectedProjectId((current) => current ?? data[0]?.id ?? null)
     }).catch(() => {
-      const demo: Project = { id: 'demo-project', name: 'チームプロジェクト', description: 'チームのタスク管理', owner_id: userId, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
-      setProjects([demo]); setSelectedProjectId(demo.id)
+      setProjects([])
+      setSelectedProjectId(null)
     })
   }, [userId])
 
@@ -32,14 +31,14 @@ function App() {
     if (!newProjectName.trim()) return
     setIsCreating(true)
     try {
-      const created = await apiClient.createProject(newProjectName.trim(), newProjectDescription.trim() || undefined, userId)
+      const created = await apiClient.createProject(newProjectName.trim(), undefined, userId)
       setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
     } catch {
       const now = new Date().toISOString()
-      const created: Project = { id: crypto.randomUUID(), name: newProjectName.trim(), description: newProjectDescription.trim(), owner_id: userId, created_at: now, updated_at: now }
+      const created: Project = { id: crypto.randomUUID(), name: newProjectName.trim(), owner_id: userId, created_at: now, updated_at: now }
       setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
     } finally {
-      setIsCreating(false); setNewProjectName(''); setNewProjectDescription(''); setIsCreateOpen(false)
+      setIsCreating(false); setNewProjectName(''); setIsCreateOpen(false)
     }
   }
 
@@ -60,7 +59,7 @@ function App() {
           </nav>
           <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>
-        <div className="sidebar-footer"><span className="avatar">{userId.slice(-2).toUpperCase()}</span><div><strong>マイワークスペース</strong><small>オンライン</small></div></div>
+        {projects.length > 0 && <div className="sidebar-footer"><span className="avatar">{userId.slice(-2).toUpperCase()}</span><div><strong>マイワークスペース</strong><small>オンライン</small></div></div>}
       </aside>
 
       <main className="main-area">
@@ -75,8 +74,8 @@ function App() {
             <div className="modal-header"><div><span className="eyebrow">NEW PROJECT</span><h2 id="create-project-title">プロジェクトを追加</h2></div><button className="icon-button" onClick={() => setIsCreateOpen(false)} aria-label="閉じる">×</button></div>
             <form onSubmit={createProject}>
               <label>プロジェクト名<input autoFocus value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="例：Webサイトリニューアル" /></label>
-              <label>説明 <span>任意</span><textarea value={newProjectDescription} onChange={(e) => setNewProjectDescription(e.target.value)} placeholder="プロジェクトの概要を入力" rows={3} /></label>
-              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : 'プロジェクトを作成'}</button></div>
+              <p className="enter-hint">Enterキーでも作成できます</p>
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : '決定'}</button></div>
             </form>
           </div>
         </div>
