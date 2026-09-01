@@ -66,6 +66,26 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
                 {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column.title).length}</b></button>}
                 <button className="more-button" aria-label="列のメニュー">•••</button>
               </div>
+              {addingTo === column.id ? (
+                <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}>
+                  <textarea
+                    autoFocus
+                    value={newTodoText}
+                    onChange={(e) => setNewTodoText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault()
+                        addTodo(column.title)
+                      }
+                      if (e.key === 'Escape') setAddingTo(null)
+                    }}
+                    placeholder="タスク名を入力"
+                  />
+                  <div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div>
+                </form>
+              ) : (
+                <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span>＋</span> タスクを追加</button>
+              )}
               <div className="todo-list">
                 {columnTodos(column.title).map((todo) => (
                   <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
@@ -75,7 +95,6 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
                 ))}
                 {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
               </div>
-              {addingTo === column.id ? <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}><textarea autoFocus value={newTodoText} onChange={(e) => setNewTodoText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setAddingTo(null) }} placeholder="タスク名を入力"/><div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div></form> : <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span>＋</span> タスクを追加</button>}
             </article>
           ))}
         </div>
