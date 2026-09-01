@@ -1,17 +1,13 @@
 {
   "name": "team-todo-backend",
-  "type": "service-worker",
   "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
   "env": {
     "production": {
       "vars": {
         "ENVIRONMENT": "production"
       }
     }
-  },
-  "build": {
-    "command": "npm run build",
-    "cwd": "./"
   },
   "vars": {
     "ENVIRONMENT": "development"
