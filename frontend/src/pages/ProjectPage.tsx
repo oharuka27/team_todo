@@ -32,9 +32,30 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
 
   const addTodo = async (columnTitle: string) => {
     if (!newTodoText.trim()) return
-    const title = newTodoText.trim(); setNewTodoText(''); setAddingTo(null)
-    try { const created = await apiClient.createTodo(project.id, title, columnTitle, userId); setTodos((items) => [...items, created]) }
-    catch { const now = new Date().toISOString(); setTodos((items) => [...items, { id: crypto.randomUUID(), project_id: project.id, title, status: 'not_started', column_name: columnTitle, user_id: userId, created_at: now, updated_at: now }]) }
+    const title = newTodoText.trim()
+    const now = new Date().toISOString()
+    const temporaryId = `pending-${crypto.randomUUID()}`
+    const temporaryTodo: TodoItem = {
+      id: temporaryId,
+      project_id: project.id,
+      title,
+      status: 'not_started',
+      column_name: columnTitle,
+      user_id: userId,
+      created_at: now,
+      updated_at: now,
+    }
+
+    setTodos((items) => [...items, temporaryTodo])
+    setNewTodoText('')
+    setAddingTo(null)
+
+    try {
+      const created = await apiClient.createTodo(project.id, title, columnTitle, userId)
+      setTodos((items) => items.map((todo) => todo.id === temporaryId ? created : todo))
+    } catch {
+      setTodos((items) => items.map((todo) => todo.id === temporaryId ? { ...todo, id: crypto.randomUUID() } : todo))
+    }
   }
   const deleteTodo = async (id: string) => { setTodos((items) => items.filter((todo) => todo.id !== id)); try { await apiClient.deleteTodo(id) } catch { /* local fallback */ } }
   const moveTodo = async (id: string, columnName: string) => {
@@ -66,6 +87,15 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
                 {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column.title).length}</b></button>}
                 <button className="more-button" aria-label="列のメニュー">•••</button>
               </div>
+              <div className="todo-list">
+                {columnTodos(column.title).map((todo) => (
+                  <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
+                    <button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button><p>{todo.title}</p>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar">{userId.slice(-1).toUpperCase()}</span></div>
+                  </div>
+                ))}
+                {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
+              </div>
               {addingTo === column.id ? (
                 <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}>
                   <textarea
@@ -86,15 +116,6 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
               ) : (
                 <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span>＋</span> タスクを追加</button>
               )}
-              <div className="todo-list">
-                {columnTodos(column.title).map((todo) => (
-                  <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
-                    <button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button><p>{todo.title}</p>
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar">{userId.slice(-1).toUpperCase()}</span></div>
-                  </div>
-                ))}
-                {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
-              </div>
             </article>
           ))}
         </div>
