@@ -6,7 +6,7 @@
     {
       "binding": "DB",
       "database_name": "team-todo-db",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "54190e5f-8add-429d-99fb-2c7da4cd4901"
     }
   ],
   "env": {
