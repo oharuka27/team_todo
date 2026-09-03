@@ -64,6 +64,7 @@ class MemoryD1 {
     if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
     if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
     if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => ({ ...member, nickname: this.users.find((user) => user.id === member.user_id)?.nickname }))
+    if (sql.includes("SELECT user_id FROM project_members") && sql.includes("role = 'member'")) return this.members.filter((member) => member.project_id === params[0] && member.role === 'member').map((member) => ({ user_id: member.user_id }))
     if (sql.includes('FROM projects WHERE owner_id')) return this.projects.filter((project) => project.owner_id === params[0])
     if (sql.includes('FROM projects p JOIN project_members pm')) return this.members.filter((member) => member.user_id === params[0]).map((member) => this.projects.find((project) => project.id === member.project_id)).filter((project) => project && (sql.includes('p.owner_id <> ?') ? project.owner_id !== params[1] : project.owner_id === params[1]))
     if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
@@ -295,6 +296,19 @@ describe('Team Todo API', () => {
 
     const repeatedResponse = await app.request(`/api/projects/${project.id}?user_id=user-1`, { method: 'DELETE' }, environment)
     expect(repeatedResponse.status).toBe(200)
+  })
+
+  it('プロジェクト削除を各メンバーのユーザーチャンネルへ通知する', async () => {
+    database.users.push({ id: 'member-1', nickname: '佐藤' })
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '削除通知対象', user_id: 'owner-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+    await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
+    realtime.messages = []
+
+    const response = await app.request(`/api/projects/${project.id}?user_id=owner-1`, { method: 'DELETE' }, environment)
+
+    expect(response.status).toBe(200)
+    expect(realtime.messages).toContainEqual({ channel: 'user:member-1', event: { type: 'project.deleted', project_id: project.id, project_name: '削除通知対象', user_id: 'member-1' } })
   })
 
   it('オーナー以外によるプロジェクト名変更と削除を拒否する', async () => {

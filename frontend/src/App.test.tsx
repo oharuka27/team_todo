@@ -134,6 +134,22 @@ describe('App', () => {
     expect(await screen.findByText('「リアルタイム参加」プロジェクトに追加されました。')).toBeInTheDocument()
   })
 
+  it('オーナーによる削除をWebSocketで受信し、OKまで操作を遮る通知を表示する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '削除対象'), owner_id: 'owner-1' }])
+    render(<App />)
+    await screen.findByRole('button', { name: '削除対象' })
+    mockedApi.getProjects.mockResolvedValue([])
+
+    userSocket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'project.deleted', project_id: 'member-project', project_name: '削除対象' }) }))
+
+    expect(await screen.findByText('「削除対象」プロジェクトはオーナーによって削除されました。')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'プロジェクトが削除されました' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'OK' }))
+    expect(screen.queryByRole('dialog', { name: 'プロジェクトが削除されました' })).not.toBeInTheDocument()
+  })
+
   it('メンバープロジェクトから確認入力後に脱退する', async () => {
     const user = userEvent.setup()
     localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')

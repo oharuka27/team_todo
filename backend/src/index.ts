@@ -10,7 +10,7 @@ interface BoardColumn { id: string; project_id: string; title: string; position:
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
-interface RealtimeEvent { type: string; project_id?: string; user_id?: string }
+interface RealtimeEvent { type: string; project_id?: string; project_name?: string; user_id?: string }
 
 export class RealtimeChannel {
   constructor(private readonly state: DurableObjectState) {}
@@ -183,6 +183,7 @@ app.delete('/api/projects/:id', async (c) => {
   // does not exist in D1, but removing it from the client is still successful.
   if (!project) return c.json({ success: true });
   if (!c.req.query('user_id') || project.owner_id !== c.req.query('user_id')) return c.json({ error: 'Only the owner can delete the project' }, 403);
+  const { results: members } = await c.env.DB.prepare("SELECT user_id FROM project_members WHERE project_id = ? AND role = 'member'").bind(id).all<Pick<ProjectMember, 'user_id'>>();
 
   // Delete dependants explicitly so this also works if foreign-key enforcement is
   // disabled for an existing D1 database.
@@ -193,7 +194,10 @@ app.delete('/api/projects/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
   ]);
-  await broadcast(c.env, `project:${id}`, { type: 'project.deleted', project_id: id, user_id: project.owner_id });
+  await Promise.all([
+    broadcast(c.env, `project:${id}`, { type: 'project.deleted', project_id: id, project_name: project.name, user_id: project.owner_id }),
+    ...members.map((member) => broadcast(c.env, `user:${member.user_id}`, { type: 'project.deleted', project_id: id, project_name: project.name, user_id: member.user_id })),
+  ]);
   return c.json({ success: true });
 });
 

@@ -36,6 +36,7 @@ function App() {
   const [leaveConfirmation, setLeaveConfirmation] = useState('')
   const [draggedProject, setDraggedProject] = useState<{ id: string; group: 'owner' | 'member' } | null>(null)
   const [dropPreview, setDropPreview] = useState<{ group: 'owner' | 'member'; index: number } | null>(null)
+  const [deletedProjectNotices, setDeletedProjectNotices] = useState<Array<{ project_id: string; project_name: string }>>([])
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
@@ -82,7 +83,15 @@ function App() {
       if (!active) return
       try {
         socket = apiClient.connectUserEvents(userId)
-        socket.onmessage = () => window.dispatchEvent(new Event('team-todo-refresh'))
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(String(event.data)) as { type?: string; project_id?: string; project_name?: string }
+            if (message.type === 'project.deleted' && message.project_id && message.project_name) {
+              setDeletedProjectNotices((items) => items.some((item) => item.project_id === message.project_id) ? items : [...items, { project_id: message.project_id!, project_name: message.project_name! }])
+            }
+          } catch { /* ignore malformed realtime messages */ }
+          window.dispatchEvent(new Event('team-todo-refresh'))
+        }
         socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
         socket.onerror = () => socket?.close()
       } catch { retryId = window.setTimeout(connect, 5_000) }
@@ -313,6 +322,10 @@ function App() {
 
       {notificationsChecked && notifications.length > 0 && (
         <div className="modal-backdrop invitation-backdrop"><div className="modal invitation-modal" role="dialog" aria-modal="true" aria-labelledby="invitation-title"><span className="account-symbol"><Icon size={25}><path d="M5 12h14M12 5v14"/></Icon></span><h2 id="invitation-title">プロジェクトに追加されました</h2><ul>{notifications.map((item) => <li key={item.project_id}>「{item.project_name}」プロジェクトに追加されました。</li>)}</ul>{notificationError && <p className="delete-error" role="alert">{notificationError}</p>}<button className="primary-button invitation-ok" onClick={acknowledgeNotifications}>OK</button></div></div>
+      )}
+
+      {deletedProjectNotices.length > 0 && (
+        <div className="modal-backdrop invitation-backdrop"><div className="modal invitation-modal" role="dialog" aria-modal="true" aria-labelledby="project-deleted-title"><span className="account-symbol deleted-project-symbol"><Icon size={25}><path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/></Icon></span><h2 id="project-deleted-title">プロジェクトが削除されました</h2><ul>{deletedProjectNotices.map((item) => <li key={item.project_id}>「{item.project_name}」プロジェクトはオーナーによって削除されました。</li>)}</ul><button className="primary-button invitation-ok" onClick={() => setDeletedProjectNotices([])}>OK</button></div></div>
       )}
 
       {memberDialog && (
