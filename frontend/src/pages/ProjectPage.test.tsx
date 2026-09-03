@@ -11,6 +11,7 @@ vi.mock('../services/api', () => ({
     getColumns: vi.fn(),
     getTopics: vi.fn(),
     createTopic: vi.fn(),
+    updateTopic: vi.fn(),
     createTodo: vi.fn(),
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
@@ -89,6 +90,7 @@ describe('ProjectPage', () => {
     await user.type(screen.getByRole('textbox', { name: 'フロントエンドのタスク名' }), '画面を作る')
     await user.click(screen.getByRole('button', { name: '追加' }))
 
+    expect(mockedApi.createTopic).toHaveBeenCalledWith(project.id, 'フロントエンド', expect.stringMatching(/^#[0-9a-fA-F]{6}$/))
     expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', 'user-1', undefined, topic.id)
     await user.click(await screen.findByRole('button', { name: /画面を作る/ }))
     expect(screen.getByRole('dialog', { name: '画面を作る' })).toBeInTheDocument()
@@ -121,6 +123,20 @@ describe('ProjectPage', () => {
     expect(targetCard).toHaveClass('drop-target')
     fireEvent.drop(targetCard, { dataTransfer })
     await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-free', { topic_id: topic.id }))
+  })
+
+  it('トピックのプリセット色を表示し、カスタム色へ変更する', async () => {
+    const user = userEvent.setup()
+    const topic = { id: 'topic-color', project_id: project.id, name: '色付き', color: '#5f91c9', created_at: now, updated_at: now }
+    mockedApi.getTopics.mockResolvedValue([topic])
+    mockedApi.getTodos.mockResolvedValue([])
+    mockedApi.updateTopic.mockResolvedValue({ ...topic, color: '#336699' })
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+    await user.click(screen.getByRole('button', { name: 'トピック' }))
+    const picker = await screen.findByLabelText('色付きの色')
+    expect(picker).toHaveValue('#5f91c9')
+    fireEvent.change(picker, { target: { value: '#336699' } })
+    await waitFor(() => expect(mockedApi.updateTopic).toHaveBeenCalledWith('topic-color', { color: '#336699' }))
   })
 
   it('ドラッグ＆ドロップでタスクの状態を変更する', async () => {

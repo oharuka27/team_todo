@@ -17,6 +17,7 @@ vi.mock('./services/api', () => ({
     getColumns: vi.fn(),
     getTopics: vi.fn(),
     createTopic: vi.fn(),
+    updateTopic: vi.fn(),
     createTodo: vi.fn(),
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),

@@ -8,7 +8,7 @@ interface UserAccount { id: string; nickname: string; avatar_color?: string; cre
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
 interface TodoItem { id: string; project_id: string; topic_id?: string | null; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
-interface Topic { id: string; project_id: string; name: string; created_at: string; updated_at: string }
+interface Topic { id: string; project_id: string; name: string; color?: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
 interface RealtimeEvent { type: string; project_id?: string; project_name?: string; user_id?: string }
@@ -287,13 +287,26 @@ app.get('/api/projects/:projectId/topics', async (c) => {
 
 app.post('/api/projects/:projectId/topics', async (c) => {
   const projectId = c.req.param('projectId');
-  const name = ((await c.req.json()) as { name?: string }).name?.trim();
+  const body = await c.req.json() as { name?: string; color?: string };
+  const name = body.name?.trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
+  const color = body.color && /^#[0-9a-fA-F]{6}$/.test(body.color) ? body.color.toLowerCase() : '#72b7a8';
   const now = new Date().toISOString();
-  const topic: Topic = { id: uuidv4(), project_id: projectId, name, created_at: now, updated_at: now };
-  await c.env.DB.prepare('INSERT INTO topics (id, project_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').bind(topic.id, topic.project_id, topic.name, now, now).run();
+  const topic: Topic = { id: uuidv4(), project_id: projectId, name, color, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO topics (id, project_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(topic.id, topic.project_id, topic.name, topic.color, now, now).run();
   await broadcast(c.env, `project:${projectId}`, { type: 'topic.created', project_id: projectId });
   return c.json(topic, 201);
+});
+
+app.put('/api/topics/:id', async (c) => {
+  const topic = await c.env.DB.prepare('SELECT * FROM topics WHERE id = ?').bind(c.req.param('id')).first<Topic>();
+  if (!topic) return c.json({ error: 'Topic not found' }, 404);
+  const color = ((await c.req.json()) as { color?: string }).color;
+  if (!color || !/^#[0-9a-fA-F]{6}$/.test(color)) return c.json({ error: 'color must be a hex color' }, 400);
+  const updated = { ...topic, color: color.toLowerCase(), updated_at: new Date().toISOString() };
+  await c.env.DB.prepare('UPDATE topics SET color = ?, updated_at = ? WHERE id = ?').bind(updated.color, updated.updated_at, topic.id).run();
+  await broadcast(c.env, `project:${topic.project_id}`, { type: 'topic.updated', project_id: topic.project_id });
+  return c.json(updated);
 });
 
 app.put('/api/columns/:id', async (c) => {

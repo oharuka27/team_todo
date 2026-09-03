@@ -56,6 +56,7 @@ class MemoryD1 {
     }
     if (sql.includes('FROM projects WHERE id')) return this.projects.find((row) => row.id === params[0])
     if (sql.includes('FROM board_columns WHERE id')) return this.columns.find((row) => row.id === params[0])
+    if (sql.includes('FROM topics WHERE id')) return this.topics.find((row) => row.id === params[0])
     if (sql.includes('FROM todos WHERE id')) return this.todos.find((row) => row.id === params[0])
     if (sql.includes('FROM project_members WHERE project_id')) return this.members.find((row) => row.project_id === params[0] && row.user_id === params[1])
     return undefined
@@ -106,7 +107,7 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO topics')) {
-      this.topics.push({ id: params[0], project_id: params[1], name: params[2], created_at: params[3], updated_at: params[4] })
+      this.topics.push({ id: params[0], project_id: params[1], name: params[2], color: params[3], created_at: params[4], updated_at: params[5] })
       return 1
     }
     if (sql.startsWith('INSERT INTO todo_comments')) {
@@ -123,6 +124,12 @@ class MemoryD1 {
       const user = this.users.find((row) => row.id === params[3])
       if (!user) return 0
       Object.assign(user, { nickname: params[0], avatar_color: params[1], updated_at: params[2] })
+      return 1
+    }
+    if (sql.startsWith('UPDATE topics SET color')) {
+      const topic = this.topics.find((row) => row.id === params[2])
+      if (!topic) return 0
+      Object.assign(topic, { color: params[0], updated_at: params[1] })
       return 1
     }
     if (sql.startsWith('UPDATE projects SET name')) {
@@ -293,6 +300,8 @@ describe('Team Todo API', () => {
     const topicResponse = await app.request('/api/projects/project-1/topics', jsonRequest({ name: 'フロントエンド' }), environment)
     const topic = await topicResponse.json() as { id: string }
     expect(topicResponse.status).toBe(201)
+    const colorResponse = await app.request(`/api/topics/${topic.id}`, jsonRequest({ color: '#336699' }, 'PUT'), environment)
+    expect(await colorResponse.json()).toMatchObject({ color: '#336699' })
 
     const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', topic_id: topic.id, title: '画面を作る', column_name: 'To Do', user_id: 'user-1' }), environment)
     const todo = await todoResponse.json() as { id: string; topic_id: string }

@@ -9,6 +9,7 @@ const defaultColumns = (): BoardColumn[] => [
   { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
 ]
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+const TOPIC_COLORS = ['#5baF9f', '#5f91c9', '#8b78c6', '#d1849f', '#dc8b62', '#d2aa45', '#73a95c', '#4ea4b8', '#9a8068', '#7c8da8']
 
 export default function ProjectPage({ project, userId, nickname, avatarColor = '#4a9c9b', onProjectUpdated }: ProjectPageProps) {
   const [todos, setTodos] = useState<TodoItem[]>([])
@@ -166,7 +167,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const createTopic = async (event: React.FormEvent) => {
     event.preventDefault()
     const name = newTopicName.trim(); if (!name) return
-    try { const created = await apiClient.createTopic(project.id, name); setTopics((items) => [...items, created]); setNewTopicName('') }
+    try { const created = await apiClient.createTopic(project.id, name, TOPIC_COLORS[topics.length % TOPIC_COLORS.length]); setTopics((items) => [...items, created]); setNewTopicName('') }
     catch { setNotice('トピックを作成できませんでした') }
   }
   const createTopicTask = async (topicId: string | null) => {
@@ -186,13 +187,21 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     try { await apiClient.updateTodo(target.id, { topic_id: topicId }) }
     catch { setTodos(previous) }
   }
+  const updateTopicColor = async (topicId: string, color: string) => {
+    const previous = topics
+    setTopics((items) => items.map((topic) => topic.id === topicId ? { ...topic, color } : topic))
+    try { const updated = await apiClient.updateTopic(topicId, { color }); setTopics((items) => items.map((topic) => topic.id === topicId ? updated : topic)) }
+    catch { setTopics(previous) }
+  }
 
   const renderTopicSection = (topic: Topic | null) => {
     const topicKey = topic?.id ?? 'unassigned'
     const topicName = topic?.name ?? '無所属'
     const topicTodos = todos.filter((todo) => (todo.topic_id ?? null) === (topic?.id ?? null))
     const collapsed = topic ? collapsedTopicIds.includes(topic.id) : false
-    return <section className={`topic-card ${collapsed ? 'collapsed' : ''} ${topicDropTarget === topicKey ? 'drop-target' : ''}`} key={topicKey} onDragEnter={(event) => { if (draggedTopicTodoId) { event.preventDefault(); setTopicDropTarget(topicKey) } }} onDragOver={(event) => { if (draggedTopicTodoId) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void moveTodoToTopic(topic?.id ?? null) }}><header>{topic ? <button className="topic-collapse-button" aria-expanded={!collapsed} aria-label={`${topicName}を${collapsed ? '展開' : '折りたたむ'}`} onClick={() => setCollapsedTopicIds((ids) => ids.includes(topic.id) ? ids.filter((id) => id !== topic.id) : [...ids, topic.id])}><span className="topic-chevron">⌄</span><span className="topic-heading"><small>TOPIC</small><h2>{topicName}</h2></span></button> : <div><span>NO TOPIC</span><h2>{topicName}</h2></div>}<b>{topicTodos.length}</b></header>{!collapsed && <div className="topic-tasks">{topicTodos.map((todo) => <button draggable key={todo.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', todo.id); setDraggedTopicTodoId(todo.id) }} onDragEnd={() => { setDraggedTopicTodoId(null); setTopicDropTarget(null) }} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topicKey ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic?.id ?? null) }}><input autoFocus aria-label={`${topicName}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topicKey); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div>}</section>
+    const topicIndex = topic ? topics.findIndex((item) => item.id === topic.id) : -1
+    const topicColor = topic ? topic.color || TOPIC_COLORS[Math.max(0, topicIndex) % TOPIC_COLORS.length] : undefined
+    return <section className={`topic-card ${collapsed ? 'collapsed' : ''} ${topicDropTarget === topicKey ? 'drop-target' : ''}`} style={topicColor ? { backgroundColor: `${topicColor}14`, borderColor: `${topicColor}66` } : undefined} key={topicKey} onDragEnter={(event) => { if (draggedTopicTodoId) { event.preventDefault(); setTopicDropTarget(topicKey) } }} onDragOver={(event) => { if (draggedTopicTodoId) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void moveTodoToTopic(topic?.id ?? null) }}><header>{topic ? <button className="topic-collapse-button" aria-expanded={!collapsed} aria-label={`${topicName}を${collapsed ? '展開' : '折りたたむ'}`} onClick={() => setCollapsedTopicIds((ids) => ids.includes(topic.id) ? ids.filter((id) => id !== topic.id) : [...ids, topic.id])}><span className="topic-chevron" style={{ color: topicColor }}>⌄</span><span className="topic-heading"><small style={{ color: topicColor }}>TOPIC</small><h2>{topicName}</h2></span></button> : <div><span>NO TOPIC</span><h2>{topicName}</h2></div>}{topic && <input className="topic-color-picker" type="color" aria-label={`${topicName}の色`} value={topicColor} onChange={(event) => void updateTopicColor(topic.id, event.target.value)} onClick={(event) => event.stopPropagation()}/>}<b>{topicTodos.length}</b></header>{!collapsed && <div className="topic-tasks">{topicTodos.map((todo) => <button draggable key={todo.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', todo.id); setDraggedTopicTodoId(todo.id) }} onDragEnd={() => { setDraggedTopicTodoId(null); setTopicDropTarget(null) }} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topicKey ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic?.id ?? null) }}><input autoFocus aria-label={`${topicName}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topicKey); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div>}</section>
   }
 
   const cancelProjectNameEdit = () => {

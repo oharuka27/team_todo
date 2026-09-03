@@ -36,6 +36,7 @@ export interface Topic {
   id: string;
   project_id: string;
   name: string;
+  color?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -219,8 +220,12 @@ class ApiClient {
     return this.request('GET', `/api/projects/${projectId}/topics`);
   }
 
-  async createTopic(projectId: string, name: string): Promise<Topic> {
-    return this.request('POST', `/api/projects/${projectId}/topics`, { name });
+  async createTopic(projectId: string, name: string, color?: string): Promise<Topic> {
+    return this.request('POST', `/api/projects/${projectId}/topics`, { name, color });
+  }
+
+  async updateTopic(topicId: string, updates: Pick<Topic, 'color'>): Promise<Topic> {
+    return this.request('PUT', `/api/topics/${topicId}`, updates);
   }
 
   async updateTodo(todoId: string, updates: Partial<TodoItem>): Promise<TodoItem> {
