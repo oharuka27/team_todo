@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiClient, type BoardColumn, type Project, type TodoItem } from '../services/api'
 import '../styles/ProjectPage.css'
 
-interface ProjectPageProps { project: Project; userId: string; nickname: string }
+interface ProjectPageProps { project: Project; userId: string; nickname: string; onProjectUpdated: (project: Project) => void }
 const defaultColumns = (): BoardColumn[] => [
   { id: 'todo', title: 'To Do', position: 0 }, { id: 'progress', title: 'In Progress', position: 1 },
   { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
 ]
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 
-export default function ProjectPage({ project, userId, nickname }: ProjectPageProps) {
+export default function ProjectPage({ project, userId, nickname, onProjectUpdated }: ProjectPageProps) {
   const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
@@ -20,6 +20,9 @@ export default function ProjectPage({ project, userId, nickname }: ProjectPagePr
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false)
+  const [projectName, setProjectName] = useState(project.name)
+  const [isSavingProjectName, setIsSavingProjectName] = useState(false)
 
   useEffect(() => {
     Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
@@ -70,10 +73,42 @@ export default function ProjectPage({ project, userId, nickname }: ProjectPagePr
     try { await apiClient.updateColumn(column.id, title) } catch { /* local fallback */ }
   }
 
+  const cancelProjectNameEdit = () => {
+    if (isSavingProjectName) return
+    setProjectName(project.name)
+    setIsEditingProjectName(false)
+  }
+  const saveProjectName = async () => {
+    const name = projectName.trim()
+    if (!name || isSavingProjectName) return
+    if (name === project.name) { cancelProjectNameEdit(); return }
+    setIsSavingProjectName(true)
+    setNotice(null)
+    try {
+      const updated = await apiClient.updateProject(project.id, { name })
+      onProjectUpdated(updated)
+      setProjectName(updated.name)
+      setIsEditingProjectName(false)
+    } catch {
+      setNotice('プロジェクト名を更新できませんでした')
+    } finally {
+      setIsSavingProjectName(false)
+    }
+  }
+
   return (
     <section className="board-page">
       <header className="board-header">
-        <div><span className="breadcrumb">プロジェクト / {project.name}</span><h1>{project.name}</h1>{project.description && <p>{project.description}</p>}</div>
+        <div><span className="breadcrumb">プロジェクト / {project.name}</span>
+          {isEditingProjectName ? (
+            <div className="project-name-editor">
+              <input autoFocus aria-label="プロジェクト名" value={projectName} onChange={(event) => setProjectName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) saveProjectName(); if (event.key === 'Escape') cancelProjectNameEdit() }} disabled={isSavingProjectName} />
+              <button onClick={saveProjectName} aria-label="プロジェクト名を保存" disabled={!projectName.trim() || isSavingProjectName}>✓</button>
+              <button onClick={cancelProjectNameEdit} aria-label="プロジェクト名の変更をキャンセル" disabled={isSavingProjectName}>×</button>
+            </div>
+          ) : <button className="project-name-button" onClick={() => { setProjectName(project.name); setIsEditingProjectName(true) }} aria-label="プロジェクト名を変更"><h1>{project.name}</h1></button>}
+          {project.description && <p>{project.description}</p>}
+        </div>
         <div className="member-stack"><span>YT</span><span>KM</span><button aria-label="メンバーを追加">＋</button></div>
       </header>
       <div className="board-toolbar">

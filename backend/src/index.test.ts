@@ -89,6 +89,12 @@ class MemoryD1 {
       Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], updated_at: params[4] })
       return 1
     }
+    if (sql.startsWith('UPDATE projects SET name')) {
+      const project = this.projects.find((row) => row.id === params[3])
+      if (!project) return 0
+      Object.assign(project, { name: params[0], description: params[1], updated_at: params[2] })
+      return 1
+    }
     if (sql.startsWith('DELETE FROM todos WHERE id')) return this.remove(this.todos, 'id', params[0])
     if (sql.startsWith('DELETE FROM todos WHERE project_id')) return this.remove(this.todos, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM board_columns WHERE project_id')) return this.remove(this.columns, 'project_id', params[0])
@@ -144,6 +150,17 @@ describe('Team Todo API', () => {
     expect(database.projects).toHaveLength(1)
     expect(database.members).toHaveLength(1)
     expect(database.columns.map((column) => column.title)).toEqual(['To Do', 'In Progress', 'In Review', 'Done'])
+  })
+
+  it('プロジェクト名を更新する', async () => {
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '変更前', user_id: 'user-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+
+    const response = await app.request(`/api/projects/${project.id}`, jsonRequest({ name: '  変更後  ' }, 'PUT'), environment)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ id: project.id, name: '変更後' })
+    expect(database.projects[0].name).toBe('変更後')
   })
 
   it('タスクを作成し、状態を変更して削除する', async () => {

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +13,7 @@ vi.mock('../services/api', () => ({
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
     updateColumn: vi.fn(),
+    updateProject: vi.fn(),
   },
 }))
 
@@ -34,6 +36,8 @@ const todo = (id: string, title: string, columnName = 'To Do'): TodoItem => ({
 })
 
 describe('ProjectPage', () => {
+  const onProjectUpdated = vi.fn()
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockedApi.getColumns.mockResolvedValue(columns)
@@ -45,7 +49,7 @@ describe('ProjectPage', () => {
     mockedApi.createTodo.mockResolvedValue(todo('todo-2', '追加タスク'))
     mockedApi.deleteTodo.mockResolvedValue({ success: true })
 
-    render(<ProjectPage project={project} userId="user-1" nickname="山田" />)
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
     await screen.findByText('既存タスク')
     await user.click(screen.getAllByRole('button', { name: /タスクを追加/ })[0])
     await user.type(screen.getByPlaceholderText('タスク名を入力'), '追加タスク')
@@ -63,7 +67,7 @@ describe('ProjectPage', () => {
   it('ドラッグ＆ドロップでタスクの状態を変更する', async () => {
     mockedApi.getTodos.mockResolvedValue([todo('todo-1', '移動するタスク')])
     mockedApi.updateTodo.mockResolvedValue(todo('todo-1', '移動するタスク', 'In Progress'))
-    render(<ProjectPage project={project} userId="user-1" nickname="山田" />)
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
 
     const taskText = await screen.findByText('移動するタスク')
     const taskCard = taskText.closest('.todo-card') as HTMLElement
@@ -83,12 +87,34 @@ describe('ProjectPage', () => {
   it('検索文字に一致するタスクだけを表示する', async () => {
     const user = userEvent.setup()
     mockedApi.getTodos.mockResolvedValue([todo('todo-1', '設計書を作る'), todo('todo-2', 'テストを書く')])
-    render(<ProjectPage project={project} userId="user-1" nickname="山田" />)
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
 
     await screen.findByText('設計書を作る')
     await user.type(screen.getByPlaceholderText('ボードを検索'), 'テスト')
 
     expect(screen.getByText('テストを書く')).toBeInTheDocument()
     expect(screen.queryByText('設計書を作る')).not.toBeInTheDocument()
+  })
+
+  it('プロジェクト名を変更して保存する', async () => {
+    const user = userEvent.setup()
+    const updatedProject = { ...project, name: '変更後プロジェクト' }
+    mockedApi.getTodos.mockResolvedValue([])
+    mockedApi.updateProject.mockResolvedValue(updatedProject)
+    const Harness = () => {
+      const [currentProject, setCurrentProject] = useState(project)
+      return <ProjectPage project={currentProject} userId="user-1" nickname="山田" onProjectUpdated={(updated) => { onProjectUpdated(updated); setCurrentProject(updated) }} />
+    }
+    render(<Harness />)
+
+    await user.click(screen.getByRole('button', { name: 'プロジェクト名を変更' }))
+    const input = screen.getByRole('textbox', { name: 'プロジェクト名' })
+    await user.clear(input)
+    await user.type(input, '変更後プロジェクト')
+    await user.click(screen.getByRole('button', { name: 'プロジェクト名を保存' }))
+
+    await waitFor(() => expect(mockedApi.updateProject).toHaveBeenCalledWith(project.id, { name: '変更後プロジェクト' }))
+    expect(onProjectUpdated).toHaveBeenCalledWith(updatedProject)
+    expect(screen.getByRole('heading', { name: '変更後プロジェクト' })).toBeInTheDocument()
   })
 })

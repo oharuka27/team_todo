@@ -88,6 +88,9 @@ function App() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId)
   const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
+  const updateProjectInList = (updatedProject: Project) => {
+    setProjects((items) => items.map((project) => project.id === updatedProject.id ? updatedProject : project))
+  }
 
   const openDeleteDialog = (project: Project) => {
     setContextMenu(null)
@@ -144,7 +147,7 @@ function App() {
       </aside>
 
       <main className="main-area">
-        {selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} /> : (
+        {selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} onProjectUpdated={updateProjectInList} /> : (
           <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
         )}
       </main>
