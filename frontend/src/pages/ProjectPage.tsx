@@ -116,7 +116,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
     setIsSavingProjectName(true)
     setNotice(null)
     try {
-      const updated = await apiClient.updateProject(project.id, { name })
+      const updated = await apiClient.updateProject(project.id, { name }, userId)
       onProjectUpdated(updated)
       setProjectName(updated.name)
       setIsEditingProjectName(false)
@@ -137,7 +137,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
               <button onClick={saveProjectName} aria-label="プロジェクト名を保存" disabled={!projectName.trim() || isSavingProjectName}>✓</button>
               <button onClick={cancelProjectNameEdit} aria-label="プロジェクト名の変更をキャンセル" disabled={isSavingProjectName}>×</button>
             </div>
-          ) : <button className="project-name-button" onClick={() => { setProjectName(project.name); setIsEditingProjectName(true) }} aria-label="プロジェクト名を変更"><h1>{project.name}</h1></button>}
+          ) : project.owner_id === userId ? <button className="project-name-button" onClick={() => { setProjectName(project.name); setIsEditingProjectName(true) }} aria-label="プロジェクト名を変更"><h1>{project.name}</h1></button> : <h1>{project.name}</h1>}
           {project.description && <p>{project.description}</p>}
         </div>
         <div className="member-stack"><span>YT</span><span>KM</span><button aria-label="メンバーを追加">＋</button></div>

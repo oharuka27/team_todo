@@ -147,8 +147,16 @@ describe('ProjectPage', () => {
     await user.type(input, '変更後プロジェクト')
     await user.click(screen.getByRole('button', { name: 'プロジェクト名を保存' }))
 
-    await waitFor(() => expect(mockedApi.updateProject).toHaveBeenCalledWith(project.id, { name: '変更後プロジェクト' }))
+    await waitFor(() => expect(mockedApi.updateProject).toHaveBeenCalledWith(project.id, { name: '変更後プロジェクト' }, 'user-1'))
     expect(onProjectUpdated).toHaveBeenCalledWith(updatedProject)
     expect(screen.getByRole('heading', { name: '変更後プロジェクト' })).toBeInTheDocument()
+  })
+
+  it('メンバーにはプロジェクト名の変更操作を表示しない', async () => {
+    mockedApi.getTodos.mockResolvedValue([])
+    render(<ProjectPage project={{ ...project, owner_id: 'owner-1' }} userId="member-1" nickname="佐藤" onProjectUpdated={onProjectUpdated} />)
+
+    expect(await screen.findByRole('heading', { name: project.name })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'プロジェクト名を変更' })).not.toBeInTheDocument()
   })
 })

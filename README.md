@@ -5,7 +5,8 @@
 ## 🎯 機能
 
 ### フロントエンド
-- **プロジェクト管理**: プロジェクトの作成・一覧表示・選択
+- **プロジェクト管理**: オーナー／メンバープロジェクトの分類、作成・一覧表示・選択
+- **メンバー管理**: オーナーによるメンバー追加・削除、メンバー自身による脱退、初回招待通知
 - **カンバンボード**: 3列レイアウト（未着手/着手中/完了）でToDoを管理
 - **列のカスタマイズ**: 各列のタイトルをユーザーが編集可能
 - **ToDoの追加・削除**: リアルタイムな反映
@@ -115,6 +116,9 @@ npm run dev
 
 ```
 POST   /api/users                 # ニックネームを登録
+GET    /api/users                 # ユーザー一覧取得
+GET    /api/users/:id/project-notifications # 未確認のプロジェクト招待通知
+POST   /api/users/:id/project-notifications/acknowledge # 招待通知を確認済みにする
 ```
 
 ### プロジェクトAPI
@@ -125,6 +129,10 @@ GET    /api/projects              # プロジェクト一覧取得
 GET    /api/projects/:id          # プロジェクト詳細取得
 PUT    /api/projects/:id          # プロジェクト更新
 DELETE /api/projects/:id          # プロジェクト削除
+GET    /api/projects/:id/members  # プロジェクトメンバー一覧
+POST   /api/projects/:id/members  # メンバー追加（オーナーのみ）
+DELETE /api/projects/:id/members/:userId # メンバー削除（オーナーのみ）
+POST   /api/projects/:id/leave    # メンバープロジェクトから脱退
 ```
 
 ### ToDoAPI
@@ -160,6 +168,13 @@ PUT    /api/columns/:id           # 列のタイトル更新
 - `owner_id`: オーナーユーザーID
 - `created_at`: 作成日時
 - `updated_at`: 更新日時
+
+### project_members テーブル
+- `project_id`: プロジェクトID
+- `user_id`: ユーザーID
+- `role`: `owner` または `member`
+- `created_at`: 追加日時
+- `notified_at`: 招待通知の確認日時（未確認の場合はNULL）
 
 ### todos テーブル
 - `id`: ToDoアイテムID（主キー）

@@ -39,6 +39,20 @@ export interface TodoComment {
   created_at: string;
 }
 
+export interface ProjectMember {
+  project_id: string;
+  user_id: string;
+  role: 'owner' | 'member';
+  nickname: string;
+  created_at?: string;
+  notified_at?: string | null;
+}
+
+export interface ProjectNotification {
+  project_id: string;
+  project_name: string;
+}
+
 export interface BoardColumn {
   id: string;
   title: string;
@@ -89,6 +103,14 @@ class ApiClient {
     return this.request('GET', '/api/users');
   }
 
+  async getProjectNotifications(userId: string): Promise<ProjectNotification[]> {
+    return this.request('GET', `/api/users/${userId}/project-notifications`);
+  }
+
+  async acknowledgeProjectNotifications(userId: string, projectIds: string[]): Promise<{ success: boolean }> {
+    return this.request('POST', `/api/users/${userId}/project-notifications/acknowledge`, { project_ids: projectIds });
+  }
+
   // Project APIs
   async createProject(
     name: string,
@@ -112,13 +134,30 @@ class ApiClient {
 
   async updateProject(
     projectId: string,
-    updates: Partial<Project>
+    updates: Partial<Project>,
+    userId: string
   ): Promise<Project> {
-    return this.request('PUT', `/api/projects/${projectId}`, updates);
+    return this.request('PUT', `/api/projects/${projectId}`, { ...updates, user_id: userId });
   }
 
-  async deleteProject(projectId: string): Promise<{ success: boolean }> {
-    return this.request('DELETE', `/api/projects/${projectId}`);
+  async deleteProject(projectId: string, userId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/projects/${projectId}?user_id=${encodeURIComponent(userId)}`);
+  }
+
+  async getProjectMembers(projectId: string): Promise<ProjectMember[]> {
+    return this.request('GET', `/api/projects/${projectId}/members`);
+  }
+
+  async addProjectMember(projectId: string, ownerId: string, userId: string): Promise<ProjectMember> {
+    return this.request('POST', `/api/projects/${projectId}/members`, { owner_id: ownerId, user_id: userId });
+  }
+
+  async removeProjectMember(projectId: string, ownerId: string, userId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/projects/${projectId}/members/${userId}?owner_id=${encodeURIComponent(ownerId)}`);
+  }
+
+  async leaveProject(projectId: string, userId: string): Promise<{ success: boolean }> {
+    return this.request('POST', `/api/projects/${projectId}/leave`, { user_id: userId });
   }
 
   // Todo APIs

@@ -6,6 +6,7 @@
 .sidebar-heading { display: flex; justify-content: space-between; align-items: center; padding: 16px 10px 10px; color: #799098; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .project-count { min-width: 22px; padding: 2px 6px; text-align: center; border-radius: 20px; background: #dcefeb; color: #507269; letter-spacing: 0; }
 .project-list { display: flex; flex-direction: column; gap: 4px; max-height: calc(100vh - 250px); overflow-y: auto; }
+.project-group+.project-group { margin-top:12px; }.project-group-heading { display:flex;align-items:center;justify-content:space-between;padding:5px 9px;color:#799098;font-size:10px;font-weight:700; }.project-group-heading b { min-width:19px;padding:1px 5px;text-align:center;border-radius:10px;background:#e1eeec;font-size:9px; }
 .project-item, .add-project-button { width: 100%; border: 0; cursor: pointer; display: flex; align-items: center; text-align: left; }
 .project-item { gap: 11px; min-height: 47px; padding: 6px 9px; border-radius: 10px; background: transparent; transition: .18s ease; }
 .project-item:hover { background: rgba(255,255,255,.7); }
@@ -24,6 +25,7 @@
 .enter-hint { margin:-8px 0 0;color:#91a3a5;font-size:10px;text-align:right; }
 .project-context-menu { position:fixed;z-index:30;width:168px;padding:6px;background:#fff;border:1px solid #e0e8e6;border-radius:9px;box-shadow:0 12px 32px rgba(27,55,53,.2); }
 .project-context-menu button { width:100%;display:flex;align-items:center;gap:9px;border:0;border-radius:6px;padding:9px 10px;color:#b43b3b;background:transparent;cursor:pointer;font-size:13px;font-weight:600;text-align:left; }
+.project-context-menu .member-menu-item { color:#416d6a; }.project-context-menu .member-menu-item:hover,.project-context-menu .member-menu-item:focus-visible { color:#217d72;background:#e8f5f2; }
 .project-context-menu button:hover,.project-context-menu button:focus-visible { background:#fff0f0;outline:none; }
 .project-context-menu button span { width:18px;height:18px;display:grid;place-items:center;border:1px solid #d96565;border-radius:50%;font-size:14px;line-height:1; }
 .danger-eyebrow { color:#c54b4b; }
@@ -40,4 +42,6 @@
 .account-modal form { text-align:left; }
 .account-hint { margin:-9px 0 0;color:#82969b;font-size:11px; }
 .account-submit { width:100%;margin-top:3px; }
+.invitation-backdrop { z-index:45; }.invitation-modal { text-align:center; }.invitation-modal .account-symbol { margin:0 auto 13px; }.invitation-modal h2 { margin-bottom:18px; }.invitation-modal ul { margin:0 0 21px;padding:14px 18px 14px 35px;border-radius:9px;color:#405761;background:#f0f8f6;text-align:left;font-size:13px;line-height:1.8; }.invitation-ok { min-width:110px; }
+.member-modal .modal-header p { margin:5px 0 0;color:#829497;font-size:12px; }.member-selection { max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:4px; }.member-selection label { flex-direction:row;align-items:center;gap:10px;padding:9px;border:1px solid #dce7e5;border-radius:8px;cursor:pointer; }.member-selection label:has(input:checked) { border-color:#66aa9f;background:#edf8f5; }.member-selection input { width:auto; }.member-avatar { width:29px;height:29px;display:grid;place-items:center;border-radius:50%;color:#fff;background:#4ba095;font-size:10px; }.member-selection p { color:#849698;text-align:center;font-size:12px; }
 @media (max-width: 720px) { .sidebar { width:76px;flex-basis:76px;padding:0 10px; }.brand>span:last-child,.sidebar-heading>span:first-child,.project-name,.add-project-button:not(svg),.sidebar-footer div { display:none; }.brand { justify-content:center;padding:0; }.sidebar-heading { justify-content:center; }.project-item { justify-content:center;padding:6px; }.add-project-button { justify-content:center; }.sidebar-footer { justify-content:center;padding:0; } }

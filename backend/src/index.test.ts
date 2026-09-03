@@ -51,11 +51,14 @@ class MemoryD1 {
     if (sql.includes('FROM projects WHERE id')) return this.projects.find((row) => row.id === params[0])
     if (sql.includes('FROM board_columns WHERE id')) return this.columns.find((row) => row.id === params[0])
     if (sql.includes('FROM todos WHERE id')) return this.todos.find((row) => row.id === params[0])
+    if (sql.includes('FROM project_members WHERE project_id')) return this.members.find((row) => row.project_id === params[0] && row.user_id === params[1])
     return undefined
   }
 
   all(sql: string, params: unknown[]) {
     if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
+    if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
+    if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => ({ ...member, nickname: this.users.find((user) => user.id === member.user_id)?.nickname }))
     if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
     if (sql.includes('SELECT DISTINCT p.* FROM projects')) {
       return this.projects.filter((project) => project.owner_id === params[0] || this.members.some((member) => member.project_id === project.id && member.user_id === params[1]))
@@ -75,7 +78,7 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO project_members')) {
-      this.members.push({ project_id: params[0], user_id: params[1], role: 'owner', created_at: params[2] })
+      this.members.push({ project_id: params[0], user_id: params[1], role: sql.includes("'member'") ? 'member' : 'owner', created_at: params[2], notified_at: sql.includes("'member'") ? null : params[2] })
       return 1
     }
     if (sql.startsWith('INSERT INTO board_columns')) {
@@ -102,6 +105,12 @@ class MemoryD1 {
       Object.assign(project, { name: params[0], description: params[1], updated_at: params[2] })
       return 1
     }
+    if (sql.startsWith('UPDATE project_members SET notified_at')) {
+      const member = this.members.find((row) => row.project_id === params[1] && row.user_id === params[2] && row.role === 'member')
+      if (!member) return 0
+      member.notified_at = params[0]
+      return 1
+    }
     if (sql.startsWith('DELETE FROM todos WHERE id')) return this.remove(this.todos, 'id', params[0])
     if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id IN')) {
       const todoIds = new Set(this.todos.filter((todo) => todo.project_id === params[0]).map((todo) => todo.id))
@@ -113,6 +122,12 @@ class MemoryD1 {
     if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id')) return this.remove(this.comments, 'todo_id', params[0])
     if (sql.startsWith('DELETE FROM todos WHERE project_id')) return this.remove(this.todos, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM board_columns WHERE project_id')) return this.remove(this.columns, 'project_id', params[0])
+    if (sql.includes("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'")) {
+      const previousLength = this.members.length
+      const remaining = this.members.filter((member) => !(member.project_id === params[0] && member.user_id === params[1] && member.role === 'member'))
+      this.members.splice(0, this.members.length, ...remaining)
+      return previousLength - this.members.length
+    }
     if (sql.startsWith('DELETE FROM project_members WHERE project_id')) return this.remove(this.members, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM projects WHERE id')) return this.remove(this.projects, 'id', params[0])
     return 0
@@ -171,7 +186,7 @@ describe('Team Todo API', () => {
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '変更前', user_id: 'user-1' }), environment)
     const project = await createResponse.json() as { id: string }
 
-    const response = await app.request(`/api/projects/${project.id}`, jsonRequest({ name: '  変更後  ' }, 'PUT'), environment)
+    const response = await app.request(`/api/projects/${project.id}`, jsonRequest({ name: '  変更後  ', user_id: 'user-1' }, 'PUT'), environment)
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ id: project.id, name: '変更後' })
@@ -224,14 +239,60 @@ describe('Team Todo API', () => {
     const project = await createResponse.json() as { id: string }
     await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '関連タスク', column_name: 'To Do', user_id: 'user-1' }), environment)
 
-    const response = await app.request(`/api/projects/${project.id}`, { method: 'DELETE' }, environment)
+    const response = await app.request(`/api/projects/${project.id}?user_id=user-1`, { method: 'DELETE' }, environment)
     expect(response.status).toBe(200)
     expect(database.projects).toHaveLength(0)
     expect(database.members).toHaveLength(0)
     expect(database.columns).toHaveLength(0)
     expect(database.todos).toHaveLength(0)
 
-    const repeatedResponse = await app.request(`/api/projects/${project.id}`, { method: 'DELETE' }, environment)
+    const repeatedResponse = await app.request(`/api/projects/${project.id}?user_id=user-1`, { method: 'DELETE' }, environment)
     expect(repeatedResponse.status).toBe(200)
+  })
+
+  it('オーナー以外によるプロジェクト名変更と削除を拒否する', async () => {
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '保護対象', user_id: 'owner-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+
+    const updateResponse = await app.request(`/api/projects/${project.id}`, jsonRequest({ name: '不正な変更', user_id: 'member-1' }, 'PUT'), environment)
+    expect(updateResponse.status).toBe(403)
+    const deleteResponse = await app.request(`/api/projects/${project.id}?user_id=member-1`, { method: 'DELETE' }, environment)
+    expect(deleteResponse.status).toBe(403)
+    expect(database.projects).toEqual([expect.objectContaining({ id: project.id, name: '保護対象' })])
+  })
+
+  it('オーナーがメンバーを追加し、対象ユーザーが通知を確認できる', async () => {
+    database.users.push({ id: 'owner-1', nickname: '山田' }, { id: 'member-1', nickname: '佐藤' })
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '共同プロジェクト', user_id: 'owner-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+
+    const addResponse = await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
+    expect(addResponse.status).toBe(201)
+    expect(await addResponse.json()).toMatchObject({ user_id: 'member-1', nickname: '佐藤', role: 'member' })
+
+    const notificationResponse = await app.request('/api/users/member-1/project-notifications', undefined, environment)
+    expect(await notificationResponse.json()).toEqual([{ project_id: project.id, project_name: '共同プロジェクト' }])
+
+    const acknowledgeResponse = await app.request('/api/users/member-1/project-notifications/acknowledge', jsonRequest({ project_ids: [project.id] }), environment)
+    expect(acknowledgeResponse.status).toBe(200)
+    const afterAcknowledge = await app.request('/api/users/member-1/project-notifications', undefined, environment)
+    expect(await afterAcknowledge.json()).toEqual([])
+  })
+
+  it('オーナーによるメンバー削除とメンバー自身の脱退に対応する', async () => {
+    database.users.push({ id: 'owner-1', nickname: '山田' }, { id: 'member-1', nickname: '佐藤' })
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '共同プロジェクト', user_id: 'owner-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+    await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
+
+    const removeResponse = await app.request(`/api/projects/${project.id}/members/member-1?owner_id=owner-1`, { method: 'DELETE' }, environment)
+    expect(removeResponse.status).toBe(200)
+    expect(database.members.some((member) => member.user_id === 'member-1')).toBe(false)
+
+    await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
+    const leaveResponse = await app.request(`/api/projects/${project.id}/leave`, jsonRequest({ user_id: 'member-1' }), environment)
+    expect(leaveResponse.status).toBe(200)
+    expect(database.members.some((member) => member.user_id === 'member-1')).toBe(false)
+    expect(database.projects).toHaveLength(1)
   })
 })

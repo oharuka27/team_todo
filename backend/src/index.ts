@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 interface Bindings { DB: D1Database; ENVIRONMENT: string }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
 interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
+interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
@@ -33,6 +34,20 @@ app.post('/api/users', async (c) => {
 app.get('/api/users', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM users ORDER BY nickname COLLATE NOCASE ASC').all<UserAccount>();
   return c.json(results);
+});
+
+app.get('/api/users/:id/project-notifications', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT p.id AS project_id, p.name AS project_name FROM project_members pm JOIN projects p ON p.id = pm.project_id WHERE pm.user_id = ? AND pm.role = 'member' AND pm.notified_at IS NULL ORDER BY pm.created_at ASC`).bind(c.req.param('id')).all<{ project_id: string; project_name: string }>();
+  return c.json(results);
+});
+
+app.post('/api/users/:id/project-notifications/acknowledge', async (c) => {
+  const userId = c.req.param('id');
+  const projectIds = ((await c.req.json()) as { project_ids?: string[] }).project_ids;
+  if (!Array.isArray(projectIds) || !projectIds.length) return c.json({ error: 'project_ids is required' }, 400);
+  const now = new Date().toISOString();
+  await c.env.DB.batch(projectIds.map((projectId) => c.env.DB.prepare(`UPDATE project_members SET notified_at = ? WHERE project_id = ? AND user_id = ? AND role = 'member'`).bind(now, projectId, userId)));
+  return c.json({ success: true });
 });
 
 app.post('/api/projects', async (c) => {
@@ -72,9 +87,10 @@ app.get('/api/projects/:id', async (c) => {
 
 app.put('/api/projects/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as { name?: string; description?: string | null };
+  const body = await c.req.json() as { name?: string; description?: string | null; user_id?: string };
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
+  if (!body.user_id || project.owner_id !== body.user_id) return c.json({ error: 'Only the owner can update the project' }, 403);
   const updated: Project = { ...project, name: body.name?.trim() || project.name, description: body.description === undefined ? project.description : body.description, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?').bind(updated.name, updated.description, updated.updated_at, id).run();
   return c.json(updated);
@@ -82,10 +98,11 @@ app.put('/api/projects/:id', async (c) => {
 
 app.delete('/api/projects/:id', async (c) => {
   const id = c.req.param('id');
-  const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(id).first<Pick<Project, 'id'>>();
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first<Project>();
   // DELETE is idempotent. A project created by the frontend's offline fallback
   // does not exist in D1, but removing it from the client is still successful.
   if (!project) return c.json({ success: true });
+  if (!c.req.query('user_id') || project.owner_id !== c.req.query('user_id')) return c.json({ error: 'Only the owner can delete the project' }, 403);
 
   // Delete dependants explicitly so this also works if foreign-key enforcement is
   // disabled for an existing D1 database.
@@ -96,6 +113,46 @@ app.delete('/api/projects/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
   ]);
+  return c.json({ success: true });
+});
+
+app.get('/api/projects/:id/members', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT pm.project_id, pm.user_id, pm.role, pm.created_at, pm.notified_at, u.nickname FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY pm.role DESC, u.nickname COLLATE NOCASE ASC`).bind(c.req.param('id')).all<ProjectMember & { nickname: string }>();
+  return c.json(results);
+});
+
+app.post('/api/projects/:id/members', async (c) => {
+  const projectId = c.req.param('id');
+  const body = await c.req.json() as { owner_id?: string; user_id?: string };
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  if (!body.owner_id || project.owner_id !== body.owner_id) return c.json({ error: 'Only the owner can add members' }, 403);
+  if (!body.user_id || body.user_id === project.owner_id) return c.json({ error: 'A valid member user_id is required' }, 400);
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(body.user_id).first<UserAccount>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  const existing = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, body.user_id).first<ProjectMember>();
+  if (!existing) await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at) VALUES (?, ?, 'member', ?, NULL)").bind(projectId, body.user_id, new Date().toISOString()).run();
+  return c.json({ project_id: projectId, user_id: user.id, role: 'member', nickname: user.nickname }, existing ? 200 : 201);
+});
+
+app.delete('/api/projects/:id/members/:userId', async (c) => {
+  const projectId = c.req.param('id');
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  if (project.owner_id !== c.req.query('owner_id')) return c.json({ error: 'Only the owner can remove members' }, 403);
+  if (c.req.param('userId') === project.owner_id) return c.json({ error: 'The owner cannot be removed' }, 400);
+  await c.env.DB.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'").bind(projectId, c.req.param('userId')).run();
+  return c.json({ success: true });
+});
+
+app.post('/api/projects/:id/leave', async (c) => {
+  const projectId = c.req.param('id');
+  const userId = ((await c.req.json()) as { user_id?: string }).user_id;
+  if (!userId) return c.json({ error: 'user_id is required' }, 400);
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  if (project.owner_id === userId) return c.json({ error: 'The owner cannot leave the project' }, 400);
+  await c.env.DB.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'").bind(projectId, userId).run();
   return c.json({ success: true });
 });
 

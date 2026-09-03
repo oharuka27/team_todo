@@ -16,6 +16,15 @@ vi.mock('./services/api', () => ({
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
     updateColumn: vi.fn(),
+    getProjectNotifications: vi.fn(),
+    acknowledgeProjectNotifications: vi.fn(),
+    getUsers: vi.fn(),
+    getProjectMembers: vi.fn(),
+    addProjectMember: vi.fn(),
+    removeProjectMember: vi.fn(),
+    leaveProject: vi.fn(),
+    getTodoComments: vi.fn(),
+    createTodoComment: vi.fn(),
   },
 }))
 
@@ -29,6 +38,92 @@ describe('App', () => {
     mockedApi.getProjects.mockResolvedValue([])
     mockedApi.getTodos.mockResolvedValue([])
     mockedApi.getColumns.mockResolvedValue([])
+    mockedApi.getProjectNotifications.mockResolvedValue([])
+    mockedApi.getUsers.mockResolvedValue([])
+    mockedApi.getProjectMembers.mockResolvedValue([])
+  })
+
+  it('オーナー／メンバープロジェクトを分類し、オーナーがメンバーを追加する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([project('owner-project', '所有プロジェクト'), { ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
+    mockedApi.getUsers.mockResolvedValue([{ id: 'member-1', nickname: '佐藤', created_at: now, updated_at: now }])
+    mockedApi.getProjectMembers.mockResolvedValue([])
+    mockedApi.addProjectMember.mockResolvedValue({ project_id: 'owner-project', user_id: 'member-1', role: 'member', nickname: '佐藤' })
+    render(<App />)
+
+    expect(await screen.findByText('オーナープロジェクト')).toBeInTheDocument()
+    expect(screen.getByText('メンバープロジェクト')).toBeInTheDocument()
+    fireEvent.contextMenu(screen.getByRole('button', { name: '所有プロジェクト' }))
+    await user.click(screen.getByRole('menuitem', { name: /メンバー追加/ }))
+    await user.click(await screen.findByRole('checkbox', { name: /佐藤/ }))
+    await user.click(screen.getByRole('button', { name: '実行' }))
+
+    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith('owner-project', 'user-test', 'member-1'))
+  })
+
+  it('招待通知を確認してからメンバープロジェクトを表示する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
+    mockedApi.getProjectNotifications.mockResolvedValue([{ project_id: 'member-project', project_name: '参加プロジェクト' }])
+    mockedApi.acknowledgeProjectNotifications.mockResolvedValue({ success: true })
+    render(<App />)
+
+    expect(await screen.findByText('「参加プロジェクト」プロジェクトに追加されました。')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(mockedApi.acknowledgeProjectNotifications).toHaveBeenCalledWith('user-test', ['member-project']))
+    expect(screen.queryByRole('dialog', { name: 'プロジェクトに追加されました' })).not.toBeInTheDocument()
+  })
+
+  it('画面表示中に追加されたプロジェクトを自動取得して通知する', async () => {
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    render(<App />)
+    await screen.findByText('オーナープロジェクト')
+
+    mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '新しい参加プロジェクト'), owner_id: 'other-user' }])
+    mockedApi.getProjectNotifications.mockResolvedValue([{ project_id: 'member-project', project_name: '新しい参加プロジェクト' }])
+    fireEvent.focus(window)
+
+    expect(await screen.findByText('「新しい参加プロジェクト」プロジェクトに追加されました。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新しい参加プロジェクト' })).toBeInTheDocument()
+  })
+
+  it('メンバープロジェクトから確認入力後に脱退する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
+    mockedApi.leaveProject.mockResolvedValue({ success: true })
+    render(<App />)
+
+    const projectButton = await screen.findByRole('button', { name: '参加プロジェクト' })
+    fireEvent.contextMenu(projectButton)
+    await user.click(screen.getByRole('menuitem', { name: '脱退' }))
+    await user.type(screen.getByRole('textbox', { name: /確認のため「脱退」/ }), '脱退')
+    await user.click(screen.getByRole('button', { name: '実行' }))
+
+    await waitFor(() => expect(mockedApi.leaveProject).toHaveBeenCalledWith('member-project', 'user-test'))
+    expect(screen.queryByRole('button', { name: '参加プロジェクト' })).not.toBeInTheDocument()
+  })
+
+  it('オーナーが確認入力後に選択したメンバーを削除する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([project('owner-project', '所有プロジェクト')])
+    mockedApi.getUsers.mockResolvedValue([{ id: 'member-1', nickname: '佐藤', created_at: now, updated_at: now }])
+    mockedApi.getProjectMembers.mockResolvedValue([{ project_id: 'owner-project', user_id: 'member-1', role: 'member', nickname: '佐藤' }])
+    mockedApi.removeProjectMember.mockResolvedValue({ success: true })
+    render(<App />)
+
+    fireEvent.contextMenu(await screen.findByRole('button', { name: '所有プロジェクト' }))
+    await user.click(screen.getByRole('menuitem', { name: 'メンバー削除' }))
+    await user.click(await screen.findByRole('checkbox', { name: /佐藤/ }))
+    const executeButton = screen.getByRole('button', { name: '実行' })
+    expect(executeButton).toBeDisabled()
+    await user.type(screen.getByRole('textbox', { name: '確認入力' }), '削除')
+    await user.click(executeButton)
+
+    await waitFor(() => expect(mockedApi.removeProjectMember).toHaveBeenCalledWith('owner-project', 'user-test', 'member-1'))
   })
 
   it('登録したニックネームと先頭文字を表示する', async () => {
@@ -64,13 +159,13 @@ describe('App', () => {
     expect(mockedApi.createProject).toHaveBeenCalledWith('新規プロジェクト', undefined, 'user-test')
 
     fireEvent.contextMenu(newProjectButton, { clientX: 100, clientY: 100 })
-    await user.click(screen.getByRole('menuitem', { name: /削除/ }))
+    await user.click(screen.getByRole('menuitem', { name: 'プロジェクト削除' }))
     const executeButton = screen.getByRole('button', { name: '実行' })
     expect(executeButton).toBeDisabled()
     await user.type(screen.getByRole('textbox', { name: /確認のため/ }), '削除')
     await user.click(executeButton)
 
-    await waitFor(() => expect(mockedApi.deleteProject).toHaveBeenCalledWith('project-2'))
+    await waitFor(() => expect(mockedApi.deleteProject).toHaveBeenCalledWith('project-2', 'user-test'))
     expect(screen.queryByRole('button', { name: '新規プロジェクト' })).not.toBeInTheDocument()
   })
 })
