@@ -66,6 +66,13 @@ npm test
 
 開発中にテストを監視実行する場合は `npm run test:watch` を使用します。
 
+### バックエンドテスト
+
+```bash
+cd backend
+npm test
+```
+
 ### バックエンド
 
 ```bash
