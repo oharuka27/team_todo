@@ -6,11 +6,12 @@ interface TaskDetailModalProps {
   todo: TodoItem
   userId: string
   nickname: string
+  refreshToken?: number
   onClose: () => void
   onUpdated: (todo: TodoItem) => void
 }
 
-export default function TaskDetailModal({ todo, userId, nickname, onClose, onUpdated }: TaskDetailModalProps) {
+export default function TaskDetailModal({ todo, userId, nickname, refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
   const [users, setUsers] = useState<UserAccount[]>([])
   const [comments, setComments] = useState<TodoComment[]>([])
   const [title, setTitle] = useState(todo.title)
@@ -25,12 +26,14 @@ export default function TaskDetailModal({ todo, userId, nickname, onClose, onUpd
       .then(([userData, commentData]) => {
         setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, created_at: '', updated_at: '' }])
         setComments(commentData)
+        setTitle(todo.title)
+        setDescription(todo.description ?? '')
       })
       .catch(() => {
         setUsers([{ id: userId, nickname, created_at: '', updated_at: '' }])
         setError('詳細情報の一部を読み込めませんでした')
       })
-  }, [todo.id, userId, nickname])
+  }, [todo.id, todo.title, todo.description, userId, nickname, refreshToken])
 
   const userNames = useMemo(() => new Map(users.map((user) => [user.id, user.nickname])), [users])
   const creatorName = userNames.get(todo.user_id) ?? (todo.user_id === userId ? nickname : '不明なユーザー')

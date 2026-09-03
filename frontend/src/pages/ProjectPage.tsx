@@ -28,6 +28,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
   const [isEditingProjectName, setIsEditingProjectName] = useState(false)
   const [projectName, setProjectName] = useState(project.name)
   const [isSavingProjectName, setIsSavingProjectName] = useState(false)
+  const [realtimeRevision, setRealtimeRevision] = useState(0)
 
   useEffect(() => {
     Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
@@ -51,6 +52,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
       if (!active) return
       if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
       if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
+      setRealtimeRevision((revision) => revision + 1)
       if (type === 'project.updated') {
         try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
       }
@@ -228,7 +230,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
           ))}
         </div>
       )}
-      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} userId={userId} nickname={nickname} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
+      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} userId={userId} nickname={nickname} refreshToken={realtimeRevision} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
     </section>
   )
 }
