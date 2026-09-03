@@ -96,6 +96,24 @@ describe('ProjectPage', () => {
     expect(screen.queryByText('設計書を作る')).not.toBeInTheDocument()
   })
 
+  it('編集アイコンからタスク名を変更する', async () => {
+    const user = userEvent.setup()
+    mockedApi.getTodos.mockResolvedValue([todo('todo-1', '変更前タスク')])
+    mockedApi.updateTodo.mockResolvedValue(todo('todo-1', '変更後タスク'))
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    await screen.findByText('変更前タスク')
+    await user.click(screen.getByRole('button', { name: '変更前タスクを編集' }))
+    const input = screen.getByRole('textbox', { name: 'タスク名' })
+    await user.clear(input)
+    await user.type(input, '変更後タスク')
+    await user.click(screen.getByRole('button', { name: 'タスク名を保存' }))
+
+    await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-1', { title: '変更後タスク' }))
+    expect(screen.getByText('変更後タスク')).toBeInTheDocument()
+    expect(screen.queryByText('変更前タスク')).not.toBeInTheDocument()
+  })
+
   it('プロジェクト名を変更して保存する', async () => {
     const user = userEvent.setup()
     const updatedProject = { ...project, name: '変更後プロジェクト' }

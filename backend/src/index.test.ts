@@ -177,6 +177,17 @@ describe('Team Todo API', () => {
     expect(database.todos).toHaveLength(0)
   })
 
+  it('タスク名を更新する', async () => {
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', title: '変更前タスク', column_name: 'To Do', user_id: 'user-1' }), environment)
+    const created = await createResponse.json() as { id: string }
+
+    const response = await app.request(`/api/todos/${created.id}`, jsonRequest({ title: '  変更後タスク  ' }, 'PUT'), environment)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ id: created.id, title: '変更後タスク' })
+    expect(database.todos[0].title).toBe('変更後タスク')
+  })
+
   it('プロジェクト削除時に関連データも削除し、再実行も成功する', async () => {
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '削除対象', user_id: 'user-1' }), environment)
     const project = await createResponse.json() as { id: string }

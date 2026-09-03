@@ -17,6 +17,9 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
   const [newTodoText, setNewTodoText] = useState('')
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
   const [editingColumnText, setEditingColumnText] = useState('')
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null)
+  const [editingTodoText, setEditingTodoText] = useState('')
+  const [savingTodoId, setSavingTodoId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
@@ -65,6 +68,32 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
   const moveTodo = async (id: string, columnName: string) => {
     const previous = todos; setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_name: columnName } : todo))
     try { await apiClient.updateTodo(id, { column_name: columnName }) } catch { setTodos(previous) }
+  }
+  const startTodoEdit = (todo: TodoItem) => {
+    setEditingTodoId(todo.id)
+    setEditingTodoText(todo.title)
+  }
+  const cancelTodoEdit = () => {
+    if (savingTodoId) return
+    setEditingTodoId(null)
+    setEditingTodoText('')
+  }
+  const saveTodoTitle = async (todo: TodoItem) => {
+    const title = editingTodoText.trim()
+    if (!title || savingTodoId) return
+    if (title === todo.title) { cancelTodoEdit(); return }
+    setSavingTodoId(todo.id)
+    setNotice(null)
+    try {
+      const updated = await apiClient.updateTodo(todo.id, { title })
+      setTodos((items) => items.map((item) => item.id === todo.id ? updated : item))
+      setEditingTodoId(null)
+      setEditingTodoText('')
+    } catch {
+      setNotice('タスク名を更新できませんでした')
+    } finally {
+      setSavingTodoId(null)
+    }
   }
   const saveColumn = async (column: BoardColumn) => {
     const title = editingColumnText.trim(); if (!title) return
@@ -125,8 +154,13 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
               </div>
               <div className="todo-list">
                 {columnTodos(column.title).map((todo) => (
-                  <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
-                    <button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button><p>{todo.title}</p>
+                  <div className={`todo-card ${editingTodoId === todo.id ? 'editing' : ''}`} key={todo.id} draggable={editingTodoId !== todo.id} onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
+                    {editingTodoId === todo.id ? (
+                      <form className="todo-title-editor" onSubmit={(event) => { event.preventDefault(); saveTodoTitle(todo) }}>
+                        <input autoFocus aria-label="タスク名" value={editingTodoText} onChange={(event) => setEditingTodoText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') cancelTodoEdit() }} disabled={savingTodoId === todo.id} />
+                        <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
+                      </form>
+                    ) : <><div className="todo-actions"><button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={() => startTodoEdit(todo)} aria-label={`${todo.title}を編集`}>✎</button></div></>}
                     <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar" title={`担当: ${nickname}`}>{nicknameInitial}</span></div>
                   </div>
                 ))}
