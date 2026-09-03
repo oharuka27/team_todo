@@ -12,6 +12,7 @@
 - **ユーザー設定**: ユーザー名と担当者アイコンの背景色を変更
 - **削除通知**: オーナーがプロジェクトを削除すると、接続中メンバーへ操作を遮るポップアップを配信
 - **カンバンボード**: 3列レイアウト（未着手/着手中/完了）でToDoを管理
+- **トピック管理**: プロジェクト内にトピックを作成し、トピック単位でタスクを整理
 - **列のカスタマイズ**: 各列のタイトルをユーザーが編集可能
 - **ToDoの追加・削除**: リアルタイムな反映
 
@@ -135,6 +136,8 @@ GET    /api/projects              # プロジェクト一覧取得
 GET    /api/projects/:id          # プロジェクト詳細取得
 PUT    /api/projects/:id          # プロジェクト更新
 DELETE /api/projects/:id          # プロジェクト削除
+GET    /api/projects/:id/topics   # トピック一覧取得
+POST   /api/projects/:id/topics   # トピック作成
 GET    /api/projects/:id/members  # プロジェクトメンバー一覧
 POST   /api/projects/:id/members  # メンバー追加（オーナーのみ）
 DELETE /api/projects/:id/members/:userId # メンバー削除（オーナーのみ）
@@ -187,6 +190,7 @@ PUT    /api/columns/:id           # 列のタイトル更新
 ### todos テーブル
 - `id`: ToDoアイテムID（主キー）
 - `project_id`: プロジェクトID（外部キー）
+- `topic_id`: 所属トピックID（未設定の場合はNULL）
 - `title`: タイトル
 - `description`: 説明
 - `status`: ステータス
@@ -202,6 +206,13 @@ PUT    /api/columns/:id           # 列のタイトル更新
 - `user_id`: コメント投稿者ID
 - `body`: コメント本文
 - `created_at`: 作成日時
+
+### topics テーブル
+- `id`: トピックID（主キー）
+- `project_id`: プロジェクトID
+- `name`: トピック名
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
 
 ### board_columns テーブル
 - `id`: 列ID（主キー）

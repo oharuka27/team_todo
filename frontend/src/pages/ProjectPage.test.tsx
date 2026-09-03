@@ -9,6 +9,8 @@ vi.mock('../services/api', () => ({
   apiClient: {
     getTodos: vi.fn(),
     getColumns: vi.fn(),
+    getTopics: vi.fn(),
+    createTopic: vi.fn(),
     createTodo: vi.fn(),
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
@@ -45,6 +47,7 @@ describe('ProjectPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedApi.getColumns.mockResolvedValue(columns)
+    mockedApi.getTopics.mockResolvedValue([])
     mockedApi.getUsers.mockResolvedValue([])
     mockedApi.getTodoComments.mockResolvedValue([])
   })
@@ -68,6 +71,26 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('button', { name: '追加タスクを削除' }))
     await waitFor(() => expect(mockedApi.deleteTodo).toHaveBeenCalledWith('todo-2'))
     expect(screen.queryByText('追加タスク')).not.toBeInTheDocument()
+  })
+
+  it('トピックページでトピックと配下タスクを作成し、共通詳細画面を開く', async () => {
+    const user = userEvent.setup()
+    const topic = { id: 'topic-1', project_id: project.id, name: 'フロントエンド', created_at: now, updated_at: now }
+    mockedApi.getTodos.mockResolvedValue([])
+    mockedApi.createTopic.mockResolvedValue(topic)
+    mockedApi.createTodo.mockResolvedValue({ ...todo('todo-topic', '画面を作る'), topic_id: topic.id })
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    await user.click(screen.getByRole('button', { name: 'トピック' }))
+    await user.type(screen.getByRole('textbox', { name: 'トピック名' }), 'フロントエンド')
+    await user.click(screen.getByRole('button', { name: 'トピックを作成' }))
+    await user.click(await screen.findByRole('button', { name: /タスクを追加/ }))
+    await user.type(screen.getByRole('textbox', { name: 'フロントエンドのタスク名' }), '画面を作る')
+    await user.click(screen.getByRole('button', { name: '追加' }))
+
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', 'user-1', undefined, topic.id)
+    await user.click(await screen.findByRole('button', { name: /画面を作る/ }))
+    expect(screen.getByRole('dialog', { name: '画面を作る' })).toBeInTheDocument()
   })
 
   it('ドラッグ＆ドロップでタスクの状態を変更する', async () => {

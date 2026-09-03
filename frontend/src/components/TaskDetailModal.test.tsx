@@ -59,4 +59,16 @@ describe('TaskDetailModal', () => {
     expect(await screen.findByText('確認しました')).toBeInTheDocument()
     expect(mockedApi.createTodoComment).toHaveBeenCalledWith(todo.id, 'user-1', '確認しました')
   })
+
+  it('タスクの所属トピックを変更する', async () => {
+    const user = userEvent.setup()
+    const onUpdated = vi.fn()
+    const topic = { id: 'topic-1', project_id: todo.project_id, name: '設計', created_at: now, updated_at: now }
+    mockedApi.updateTodo.mockResolvedValue({ ...todo, topic_id: topic.id })
+    render(<TaskDetailModal todo={todo} topics={[topic]} userId="user-1" nickname="山田" onClose={vi.fn()} onUpdated={onUpdated} />)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'トピック' }), topic.id)
+    await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith(todo.id, { topic_id: topic.id }))
+    expect(onUpdated).toHaveBeenCalledWith(expect.objectContaining({ topic_id: topic.id }))
+  })
 })

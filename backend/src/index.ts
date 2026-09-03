@@ -7,7 +7,8 @@ interface Project { id: string; name: string; description: string | null; owner_
 interface UserAccount { id: string; nickname: string; avatar_color?: string; created_at: string; updated_at: string }
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
-interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
+interface TodoItem { id: string; project_id: string; topic_id?: string | null; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
+interface Topic { id: string; project_id: string; name: string; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
 interface RealtimeEvent { type: string; project_id?: string; project_name?: string; user_id?: string }
@@ -210,6 +211,7 @@ app.delete('/api/projects/:id', async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id IN (SELECT id FROM todos WHERE project_id = ?)').bind(id),
     c.env.DB.prepare('DELETE FROM todos WHERE project_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM topics WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM board_columns WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
@@ -278,6 +280,22 @@ app.get('/api/projects/:projectId/columns', async (c) => {
   return c.json(results);
 });
 
+app.get('/api/projects/:projectId/topics', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM topics WHERE project_id = ? ORDER BY created_at ASC').bind(c.req.param('projectId')).all<Topic>();
+  return c.json(results);
+});
+
+app.post('/api/projects/:projectId/topics', async (c) => {
+  const projectId = c.req.param('projectId');
+  const name = ((await c.req.json()) as { name?: string }).name?.trim();
+  if (!name) return c.json({ error: 'name is required' }, 400);
+  const now = new Date().toISOString();
+  const topic: Topic = { id: uuidv4(), project_id: projectId, name, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO topics (id, project_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').bind(topic.id, topic.project_id, topic.name, now, now).run();
+  await broadcast(c.env, `project:${projectId}`, { type: 'topic.created', project_id: projectId });
+  return c.json(topic, 201);
+});
+
 app.put('/api/columns/:id', async (c) => {
   const id = c.req.param('id');
   const title = ((await c.req.json()) as { title?: string }).title?.trim();
@@ -294,12 +312,12 @@ app.put('/api/columns/:id', async (c) => {
 });
 
 app.post('/api/todos', async (c) => {
-  const body = await c.req.json() as { project_id?: string; title?: string; description?: string; column_name?: string; user_id?: string };
+  const body = await c.req.json() as { project_id?: string; topic_id?: string | null; title?: string; description?: string; column_name?: string; user_id?: string };
   const title = body.title?.trim();
   if (!body.project_id || !title || !body.column_name || !body.user_id) return c.json({ error: 'project_id, title, column_name and user_id are required' }, 400);
   const now = new Date().toISOString();
-  const todo: TodoItem = { id: uuidv4(), project_id: body.project_id, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, assignee_id: body.user_id, created_at: now, updated_at: now };
-  await c.env.DB.prepare('INSERT INTO todos (id, project_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
+  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, assignee_id: body.user_id, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.created', project_id: todo.project_id, user_id: todo.user_id });
   return c.json(todo, 201);
 });
@@ -311,11 +329,11 @@ app.get('/api/projects/:projectId/todos', async (c) => {
 
 app.put('/api/todos/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name' | 'assignee_id'>>;
+  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name' | 'assignee_id'>> & { topic_id?: string | null };
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
-  const updated: TodoItem = { ...todo, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
-  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.updated_at, id).run();
+  const updated = { ...todo, topic_id: body.topic_id === undefined ? (todo as TodoItem & { topic_id?: string | null }).topic_id ?? null : body.topic_id, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
+  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, topic_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.topic_id, updated.updated_at, id).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.updated', project_id: todo.project_id });
   return c.json(updated);
 });

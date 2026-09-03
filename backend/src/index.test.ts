@@ -31,6 +31,7 @@ class MemoryD1 {
   projects: Row[] = []
   members: Row[] = []
   columns: Row[] = []
+  topics: Row[] = []
   todos: Row[] = []
   comments: Row[] = []
 
@@ -73,6 +74,7 @@ class MemoryD1 {
       return this.projects.filter((project) => project.owner_id === params[0] || this.members.some((member) => member.project_id === project.id && member.user_id === params[1]))
     }
     if (sql.includes('FROM board_columns WHERE project_id')) return this.columns.filter((row) => row.project_id === params[0]).sort((a, b) => Number(a.position) - Number(b.position))
+    if (sql.includes('FROM topics WHERE project_id')) return this.topics.filter((row) => row.project_id === params[0])
     if (sql.includes('FROM todos WHERE project_id')) return this.todos.filter((row) => row.project_id === params[0])
     return []
   }
@@ -100,7 +102,11 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO todos')) {
-      this.todos.push({ id: params[0], project_id: params[1], title: params[2], description: params[3], status: params[4], column_name: params[5], user_id: params[6], assignee_id: params[7], created_at: params[8], updated_at: params[9] })
+      this.todos.push({ id: params[0], project_id: params[1], topic_id: params[2], title: params[3], description: params[4], status: params[5], column_name: params[6], user_id: params[7], assignee_id: params[8], created_at: params[9], updated_at: params[10] })
+      return 1
+    }
+    if (sql.startsWith('INSERT INTO topics')) {
+      this.topics.push({ id: params[0], project_id: params[1], name: params[2], created_at: params[3], updated_at: params[4] })
       return 1
     }
     if (sql.startsWith('INSERT INTO todo_comments')) {
@@ -108,9 +114,9 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('UPDATE todos SET title')) {
-      const todo = this.todos.find((row) => row.id === params[6])
+      const todo = this.todos.find((row) => row.id === params[7])
       if (!todo) return 0
-      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], assignee_id: params[4], updated_at: params[5] })
+      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], assignee_id: params[4], topic_id: params[5], updated_at: params[6] })
       return 1
     }
     if (sql.startsWith('UPDATE users SET nickname')) {
@@ -148,6 +154,7 @@ class MemoryD1 {
     if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id')) return this.remove(this.comments, 'todo_id', params[0])
     if (sql.startsWith('DELETE FROM todos WHERE project_id')) return this.remove(this.todos, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM board_columns WHERE project_id')) return this.remove(this.columns, 'project_id', params[0])
+    if (sql.startsWith('DELETE FROM topics WHERE project_id')) return this.remove(this.topics, 'project_id', params[0])
     if (sql.includes("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'")) {
       const previousLength = this.members.length
       const remaining = this.members.filter((member) => !(member.project_id === params[0] && member.user_id === params[1] && member.role === 'member'))
@@ -280,6 +287,19 @@ describe('Team Todo API', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ id: created.id, title: '変更後タスク' })
     expect(database.todos[0].title).toBe('変更後タスク')
+  })
+
+  it('トピックを作成し、タスクの所属トピックを設定する', async () => {
+    const topicResponse = await app.request('/api/projects/project-1/topics', jsonRequest({ name: 'フロントエンド' }), environment)
+    const topic = await topicResponse.json() as { id: string }
+    expect(topicResponse.status).toBe(201)
+
+    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', topic_id: topic.id, title: '画面を作る', column_name: 'To Do', user_id: 'user-1' }), environment)
+    const todo = await todoResponse.json() as { id: string; topic_id: string }
+    expect(todo.topic_id).toBe(topic.id)
+
+    const updateResponse = await app.request(`/api/todos/${todo.id}`, jsonRequest({ topic_id: null }, 'PUT'), environment)
+    expect(await updateResponse.json()).toMatchObject({ topic_id: null })
   })
 
   it('タスクの説明・担当者・コメントを保存する', async () => {

@@ -15,6 +15,8 @@ vi.mock('./services/api', () => ({
     deleteProject: vi.fn(),
     getTodos: vi.fn(),
     getColumns: vi.fn(),
+    getTopics: vi.fn(),
+    createTopic: vi.fn(),
     createTodo: vi.fn(),
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
@@ -50,6 +52,7 @@ describe('App', () => {
     mockedApi.getProjects.mockResolvedValue([])
     mockedApi.getTodos.mockResolvedValue([])
     mockedApi.getColumns.mockResolvedValue([])
+    mockedApi.getTopics.mockResolvedValue([])
     mockedApi.getProjectNotifications.mockResolvedValue([])
     mockedApi.getUsers.mockResolvedValue([])
     mockedApi.getProjectMembers.mockResolvedValue([])

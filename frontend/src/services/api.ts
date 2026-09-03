@@ -21,12 +21,21 @@ export interface UserAccount {
 export interface TodoItem {
   id: string;
   project_id: string;
+  topic_id?: string | null;
   title: string;
   description?: string;
   status: string;
   column_name: string;
   user_id: string;
   assignee_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Topic {
+  id: string;
+  project_id: string;
+  name: string;
   created_at: string;
   updated_at: string;
 }
@@ -189,7 +198,8 @@ class ApiClient {
     title: string,
     columnName: string,
     userId: string,
-    description?: string
+    description?: string,
+    topicId?: string | null
   ): Promise<TodoItem> {
     return this.request('POST', '/api/todos', {
       project_id: projectId,
@@ -197,11 +207,20 @@ class ApiClient {
       description,
       column_name: columnName,
       user_id: userId,
+      topic_id: topicId,
     });
   }
 
   async getTodos(projectId: string): Promise<TodoItem[]> {
     return this.request('GET', `/api/projects/${projectId}/todos`);
+  }
+
+  async getTopics(projectId: string): Promise<Topic[]> {
+    return this.request('GET', `/api/projects/${projectId}/topics`);
+  }
+
+  async createTopic(projectId: string, name: string): Promise<Topic> {
+    return this.request('POST', `/api/projects/${projectId}/topics`, { name });
   }
 
   async updateTodo(todoId: string, updates: Partial<TodoItem>): Promise<TodoItem> {

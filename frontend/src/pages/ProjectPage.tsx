@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient, type BoardColumn, type Project, type TodoItem, type UserAccount } from '../services/api'
+import { apiClient, type BoardColumn, type Project, type TodoItem, type Topic, type UserAccount } from '../services/api'
 import TaskDetailModal from '../components/TaskDetailModal'
 import '../styles/ProjectPage.css'
 
@@ -14,6 +14,11 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
   const [users, setUsers] = useState<UserAccount[]>([])
+  const [topics, setTopics] = useState<Topic[]>([])
+  const [activeView, setActiveView] = useState<'topics' | 'board'>('board')
+  const [newTopicName, setNewTopicName] = useState('')
+  const [addingTopicTaskId, setAddingTopicTaskId] = useState<string | null>(null)
+  const [newTopicTaskTitle, setNewTopicTaskTitle] = useState('')
   const [addingTo, setAddingTo] = useState<string | null>(null)
   const [newTodoText, setNewTodoText] = useState('')
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
@@ -31,11 +36,12 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const [realtimeRevision, setRealtimeRevision] = useState(0)
 
   useEffect(() => {
-    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers()])
-      .then(([todoData, columnData, userData]) => {
+    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers(), apiClient.getTopics(project.id)])
+      .then(([todoData, columnData, userData, topicData]) => {
         setTodos(todoData)
         setColumns(columnData.length ? columnData : defaultColumns())
         setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
+        setTopics(topicData)
       })
       .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('オフラインモードで表示しています') })
       .finally(() => setLoading(false))
@@ -52,11 +58,12 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       try { type = (JSON.parse(String(event.data)) as { type?: string }).type ?? '' } catch { return }
       window.dispatchEvent(new Event('team-todo-refresh'))
       if (type === 'project.deleted') return
-      const [todoResult, columnResult, userResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers()])
+      const [todoResult, columnResult, userResult, topicResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers(), apiClient.getTopics(project.id)])
       if (!active) return
       if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
       if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
       if (userResult.status === 'fulfilled') setUsers(userResult.value.some((user) => user.id === userId) ? userResult.value : [...userResult.value, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
+      if (topicResult.status === 'fulfilled') setTopics(topicResult.value)
       setRealtimeRevision((revision) => revision + 1)
       if (type === 'project.updated') {
         try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
@@ -153,6 +160,20 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     try { await apiClient.updateColumn(column.id, title) } catch { /* local fallback */ }
   }
 
+  const createTopic = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const name = newTopicName.trim(); if (!name) return
+    try { const created = await apiClient.createTopic(project.id, name); setTopics((items) => [...items, created]); setNewTopicName('') }
+    catch { setNotice('トピックを作成できませんでした') }
+  }
+  const createTopicTask = async (topicId: string) => {
+    const title = newTopicTaskTitle.trim(); if (!title) return
+    try {
+      const created = await apiClient.createTodo(project.id, title, 'To Do', userId, undefined, topicId)
+      setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
+    } catch { setNotice('タスクを作成できませんでした') }
+  }
+
   const cancelProjectNameEdit = () => {
     if (isSavingProjectName) return
     setProjectName(project.name)
@@ -191,11 +212,12 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
         </div>
         <div className="member-stack"><span>YT</span><span>KM</span><button aria-label="メンバーを追加">＋</button></div>
       </header>
-      <div className="board-toolbar">
+      <nav className="project-view-tabs" aria-label="プロジェクト表示"><button className={activeView === 'topics' ? 'active' : ''} onClick={() => setActiveView('topics')}>トピック</button><button className={activeView === 'board' ? 'active' : ''} onClick={() => setActiveView('board')}>ボード</button></nav>
+      {activeView === 'board' && <div className="board-toolbar">
         <div className="search-box"><SearchIcon/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ボードを検索" /></div>
         <div className="board-label"><span className="board-dot"/> ボード</div>{notice && <span className="offline-notice">{notice}</span>}
-      </div>
-      {loading ? <div className="board-loading"><span/><p>ボードを読み込んでいます…</p></div> : (
+      </div>}
+      {loading ? <div className="board-loading"><span/><p>プロジェクトを読み込んでいます…</p></div> : activeView === 'board' ? (
         <div className="kanban-board">
           {columns.map((column, index) => (
             <article className={`kanban-column column-${index % 4}`} key={column.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { const id = e.dataTransfer.getData('todo-id'); if (id) moveTodo(id, column.title) }}>
@@ -243,8 +265,8 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
             </article>
           ))}
         </div>
-      )}
-      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} userId={userId} nickname={nickname} refreshToken={realtimeRevision} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
+      ) : <div className="topics-page"><form className="topic-create-form" onSubmit={createTopic}><input aria-label="トピック名" value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder="新しいトピック名"/><button type="submit" disabled={!newTopicName.trim()}>トピックを作成</button></form><div className="topic-list">{topics.length ? topics.map((topic) => <section className="topic-card" key={topic.id}><header><div><span>TOPIC</span><h2>{topic.name}</h2></div><b>{todos.filter((todo) => todo.topic_id === topic.id).length}</b></header><div className="topic-tasks">{todos.filter((todo) => todo.topic_id === topic.id).map((todo) => <button key={todo.id} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topic.id ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic.id) }}><input autoFocus aria-label={`${topic.name}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topic.id); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div></section>) : <div className="empty-topics"><p>トピックはまだありません</p><span>上のフォームから最初のトピックを作成してください。</span></div>}</div></div>}
+      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} topics={topics} userId={userId} nickname={nickname} refreshToken={realtimeRevision} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
     </section>
   )
 }

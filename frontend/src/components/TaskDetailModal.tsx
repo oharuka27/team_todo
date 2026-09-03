@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient, type TodoComment, type TodoItem, type UserAccount } from '../services/api'
+import { apiClient, type TodoComment, type TodoItem, type Topic, type UserAccount } from '../services/api'
 import './TaskDetailModal.css'
 
 interface TaskDetailModalProps {
   todo: TodoItem
   userId: string
   nickname: string
+  topics?: Topic[]
   refreshToken?: number
   onClose: () => void
   onUpdated: (todo: TodoItem) => void
 }
 
-export default function TaskDetailModal({ todo, userId, nickname, refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
+export default function TaskDetailModal({ todo, userId, nickname, topics = [], refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
   const [users, setUsers] = useState<UserAccount[]>([])
   const [comments, setComments] = useState<TodoComment[]>([])
   const [title, setTitle] = useState(todo.title)
@@ -98,6 +99,8 @@ export default function TaskDetailModal({ todo, userId, nickname, refreshToken =
             ) : <button className="task-detail-title" onClick={() => setIsEditingTitle(true)} aria-label="タスク名を編集"><h2 id="task-detail-title">{todo.title}</h2><span>✎</span></button>}
 
             <section className="task-detail-section"><h3>説明</h3><textarea aria-label="説明" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="説明を追加してください" disabled={isSaving}/><button className="detail-save-button" onClick={saveDescription} disabled={isSaving || description.trim() === (todo.description ?? '')}>説明を保存</button></section>
+
+            <section className="task-detail-section"><h3>トピック</h3><select aria-label="トピック" value={todo.topic_id ?? ''} onChange={(event) => updateTodo({ topic_id: event.target.value || null }, () => undefined)} disabled={isSaving}><option value="">未設定</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select></section>
 
             <section className="task-detail-section"><h3>コメント</h3><div className="comment-list">{comments.length ? comments.map((item) => <article key={item.id}><span>{Array.from(item.nickname ?? userNames.get(item.user_id) ?? '?')[0]}</span><div><strong>{item.nickname ?? userNames.get(item.user_id) ?? '不明なユーザー'}</strong><p>{item.body}</p></div></article>) : <p className="empty-comments">コメントはまだありません</p>}</div><form className="comment-form" onSubmit={addComment}><textarea aria-label="コメント" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="コメントを追加する…" disabled={isSaving}/><button type="submit" disabled={!comment.trim() || isSaving}>追加</button></form></section>
             {error && <p className="task-detail-error" role="alert">{error}</p>}
