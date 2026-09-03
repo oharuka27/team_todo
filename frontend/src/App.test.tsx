@@ -7,6 +7,8 @@ import { apiClient, type Project, type UserAccount } from './services/api'
 vi.mock('./services/api', () => ({
   apiClient: {
     registerUser: vi.fn(),
+    connectUserEvents: vi.fn(),
+    connectProjectEvents: vi.fn(),
     getProjects: vi.fn(),
     createProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -31,6 +33,14 @@ vi.mock('./services/api', () => ({
 const mockedApi = vi.mocked(apiClient)
 const now = '2026-09-03T00:00:00.000Z'
 const project = (id: string, name: string): Project => ({ id, name, owner_id: 'user-test', created_at: now, updated_at: now })
+let userSocket: WebSocket
+
+const websocketStub = () => ({
+  onmessage: null,
+  onclose: null,
+  onerror: null,
+  close: vi.fn(),
+}) as unknown as WebSocket
 
 describe('App', () => {
   beforeEach(() => {
@@ -41,6 +51,9 @@ describe('App', () => {
     mockedApi.getProjectNotifications.mockResolvedValue([])
     mockedApi.getUsers.mockResolvedValue([])
     mockedApi.getProjectMembers.mockResolvedValue([])
+    userSocket = websocketStub()
+    mockedApi.connectUserEvents.mockReturnValue(userSocket)
+    mockedApi.connectProjectEvents.mockImplementation(() => websocketStub())
   })
 
   it('オーナー／メンバープロジェクトを分類し、オーナーがメンバーを追加する', async () => {
@@ -76,7 +89,7 @@ describe('App', () => {
     expect(screen.queryByRole('dialog', { name: 'プロジェクトに追加されました' })).not.toBeInTheDocument()
   })
 
-  it('画面表示中に追加されたプロジェクトを自動取得して通知する', async () => {
+  it('画面に戻ったとき追加されたプロジェクトを自動取得して通知する', async () => {
     localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     render(<App />)
     await screen.findByText('オーナープロジェクト')
@@ -87,6 +100,18 @@ describe('App', () => {
 
     expect(await screen.findByText('「新しい参加プロジェクト」プロジェクトに追加されました。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '新しい参加プロジェクト' })).toBeInTheDocument()
+  })
+
+  it('WebSocketで招待イベントを受信するとポップアップを自動表示する', async () => {
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    render(<App />)
+    await screen.findByText('オーナープロジェクト')
+
+    mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', 'リアルタイム参加'), owner_id: 'other-user' }])
+    mockedApi.getProjectNotifications.mockResolvedValue([{ project_id: 'member-project', project_name: 'リアルタイム参加' }])
+    userSocket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'membership.added', project_id: 'member-project' }) }))
+
+    expect(await screen.findByText('「リアルタイム参加」プロジェクトに追加されました。')).toBeInTheDocument()
   })
 
   it('メンバープロジェクトから確認入力後に脱退する', async () => {

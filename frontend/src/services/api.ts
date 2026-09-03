@@ -66,6 +66,20 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  private websocketUrl(path: string): string {
+    const url = new URL(`${this.baseUrl}${path}`);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.toString();
+  }
+
+  connectUserEvents(userId: string): WebSocket {
+    return new WebSocket(this.websocketUrl(`/api/realtime/users/${encodeURIComponent(userId)}?user_id=${encodeURIComponent(userId)}`));
+  }
+
+  connectProjectEvents(projectId: string, userId: string): WebSocket {
+    return new WebSocket(this.websocketUrl(`/api/realtime/projects/${encodeURIComponent(projectId)}?user_id=${encodeURIComponent(userId)}`));
+  }
+
   private async request<T>(
     method: string,
     path: string,

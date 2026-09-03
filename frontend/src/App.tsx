@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 import ProjectPage from './pages/ProjectPage'
 import { apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
@@ -61,13 +61,35 @@ function App() {
     }
 
     void refreshWorkspace(true)
-    const intervalId = window.setInterval(() => void refreshWorkspace(), 10_000)
     const refreshOnFocus = () => void refreshWorkspace()
     window.addEventListener('focus', refreshOnFocus)
+    window.addEventListener('team-todo-refresh', refreshOnFocus)
     return () => {
       active = false
-      window.clearInterval(intervalId)
       window.removeEventListener('focus', refreshOnFocus)
+      window.removeEventListener('team-todo-refresh', refreshOnFocus)
+    }
+  }, [userId, nickname])
+
+  useEffect(() => {
+    if (!nickname || typeof apiClient.connectUserEvents !== 'function') return
+    let active = true
+    let socket: WebSocket | null = null
+    let retryId: number | null = null
+    const connect = () => {
+      if (!active) return
+      try {
+        socket = apiClient.connectUserEvents(userId)
+        socket.onmessage = () => window.dispatchEvent(new Event('team-todo-refresh'))
+        socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
+        socket.onerror = () => socket?.close()
+      } catch { retryId = window.setTimeout(connect, 5_000) }
+    }
+    connect()
+    return () => {
+      active = false
+      if (retryId !== null) window.clearTimeout(retryId)
+      socket?.close()
     }
   }, [userId, nickname])
 
@@ -125,9 +147,9 @@ function App() {
   const ownerProjects = projects.filter((project) => project.owner_id === userId)
   const memberProjects = projects.filter((project) => project.owner_id !== userId)
   const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
-  const updateProjectInList = (updatedProject: Project) => {
+  const updateProjectInList = useCallback((updatedProject: Project) => {
     setProjects((items) => items.map((project) => project.id === updatedProject.id ? updatedProject : project))
-  }
+  }, [])
 
   const openDeleteDialog = (project: Project) => {
     setContextMenu(null)

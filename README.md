@@ -7,6 +7,7 @@
 ### フロントエンド
 - **プロジェクト管理**: オーナー／メンバープロジェクトの分類、作成・一覧表示・選択
 - **メンバー管理**: オーナーによるメンバー追加・削除、メンバー自身による脱退、初回招待通知
+- **リアルタイム通知**: Durable ObjectsとWebSocket Hibernationにより、変更時だけ接続中メンバーへ通知
 - **カンバンボード**: 3列レイアウト（未着手/着手中/完了）でToDoを管理
 - **列のカスタマイズ**: 各列のタイトルをユーザーが編集可能
 - **ToDoの追加・削除**: リアルタイムな反映
@@ -107,8 +108,10 @@ npm run dev
 4. ✏️ボタンで列のタイトルを編集
 
 ### リアルタイム同期
-- 複数ユーザーがアクセスしている場合、自動的に最新の状態に同期されます
-- WebSocketを使用してリアルタイムな更新を実現
+- プロジェクトごとのDurable ObjectがWebSocket接続を管理します
+- D1の更新成功時だけ、接続中のプロジェクトメンバーへ変更イベントを配信します
+- WebSocket Hibernation APIにより、通信がない間は接続を維持したままDurable Objectを休止します
+- 切断時のみ5秒後に再接続し、定期ポーリングは行いません
 
 ## 🔧 API エンドポイント
 
@@ -133,6 +136,8 @@ GET    /api/projects/:id/members  # プロジェクトメンバー一覧
 POST   /api/projects/:id/members  # メンバー追加（オーナーのみ）
 DELETE /api/projects/:id/members/:userId # メンバー削除（オーナーのみ）
 POST   /api/projects/:id/leave    # メンバープロジェクトから脱退
+GET    /api/realtime/users/:userId       # ユーザー通知WebSocket
+GET    /api/realtime/projects/:projectId # プロジェクト更新WebSocket
 ```
 
 ### ToDoAPI

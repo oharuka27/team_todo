@@ -36,6 +36,42 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
       .finally(() => setLoading(false))
   }, [project.id])
 
+  useEffect(() => {
+    if (typeof apiClient.connectProjectEvents !== 'function') return
+    let active = true
+    let socket: WebSocket | null = null
+    let retryId: number | null = null
+    const reload = async (event: MessageEvent) => {
+      if (!active) return
+      let type = ''
+      try { type = (JSON.parse(String(event.data)) as { type?: string }).type ?? '' } catch { return }
+      window.dispatchEvent(new Event('team-todo-refresh'))
+      if (type === 'project.deleted') return
+      const [todoResult, columnResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
+      if (!active) return
+      if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
+      if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
+      if (type === 'project.updated') {
+        try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
+      }
+    }
+    const connect = () => {
+      if (!active) return
+      try {
+        socket = apiClient.connectProjectEvents(project.id, userId)
+        socket.onmessage = reload
+        socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
+        socket.onerror = () => socket?.close()
+      } catch { retryId = window.setTimeout(connect, 5_000) }
+    }
+    connect()
+    return () => {
+      active = false
+      if (retryId !== null) window.clearTimeout(retryId)
+      socket?.close()
+    }
+  }, [project.id, userId, onProjectUpdated])
+
   const filteredTodos = useMemo(() => todos.filter((todo) => todo.title.toLowerCase().includes(query.toLowerCase())), [todos, query])
   const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
 

@@ -9,6 +9,14 @@
       "database_id": "54190e5f-8add-429d-99fb-2c7da4cd4901"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REALTIME", "class_name": "RealtimeChannel" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1-realtime", "new_sqlite_classes": ["RealtimeChannel"] }
+  ],
   "env": {
     "production": {
       "vars": {

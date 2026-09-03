@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { v4 as uuidv4 } from 'uuid';
 
-interface Bindings { DB: D1Database; ENVIRONMENT: string }
+interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
 interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null }
@@ -10,10 +10,63 @@ interface BoardColumn { id: string; project_id: string; title: string; position:
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
+interface RealtimeEvent { type: string; project_id?: string; user_id?: string }
+
+export class RealtimeChannel {
+  constructor(private readonly state: DurableObjectState) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === '/broadcast' && request.method === 'POST') {
+      const message = await request.text();
+      for (const socket of this.state.getWebSockets()) {
+        try { socket.send(message); } catch { socket.close(1011, 'Broadcast failed'); }
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket upgrade required', { status: 426 });
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.state.acceptWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+    if (message === 'ping') socket.send('pong');
+  }
+}
+
+const broadcast = async (env: Bindings, channel: string, event: RealtimeEvent) => {
+  if (!env.REALTIME) return;
+  const stub = env.REALTIME.get(env.REALTIME.idFromName(channel));
+  await stub.fetch('https://realtime.internal/broadcast', { method: 'POST', body: JSON.stringify(event) });
+};
+
 const app = new Hono<{ Bindings: Bindings }>();
 app.use('*', cors());
 app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+app.get('/api/realtime/users/:userId', async (c) => {
+  const userId = c.req.param('userId');
+  if (c.req.query('user_id') !== userId) return c.json({ error: 'Forbidden' }, 403);
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<UserAccount>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  if (!c.env.REALTIME) return c.json({ error: 'Realtime is not configured' }, 503);
+  return c.env.REALTIME.get(c.env.REALTIME.idFromName(`user:${userId}`)).fetch(c.req.raw);
+});
+
+app.get('/api/realtime/projects/:projectId', async (c) => {
+  const projectId = c.req.param('projectId');
+  const userId = c.req.query('user_id');
+  if (!userId) return c.json({ error: 'user_id is required' }, 400);
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  const member = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, userId).first<ProjectMember>();
+  if (project.owner_id !== userId && !member) return c.json({ error: 'Forbidden' }, 403);
+  if (!c.env.REALTIME) return c.json({ error: 'Realtime is not configured' }, 503);
+  return c.env.REALTIME.get(c.env.REALTIME.idFromName(`project:${projectId}`)).fetch(c.req.raw);
+});
 
 app.post('/api/users', async (c) => {
   const body = await c.req.json() as { id?: string; nickname?: string };
@@ -93,6 +146,7 @@ app.put('/api/projects/:id', async (c) => {
   if (!body.user_id || project.owner_id !== body.user_id) return c.json({ error: 'Only the owner can update the project' }, 403);
   const updated: Project = { ...project, name: body.name?.trim() || project.name, description: body.description === undefined ? project.description : body.description, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?').bind(updated.name, updated.description, updated.updated_at, id).run();
+  await broadcast(c.env, `project:${id}`, { type: 'project.updated', project_id: id, user_id: body.user_id });
   return c.json(updated);
 });
 
@@ -113,6 +167,7 @@ app.delete('/api/projects/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
   ]);
+  await broadcast(c.env, `project:${id}`, { type: 'project.deleted', project_id: id, user_id: project.owner_id });
   return c.json({ success: true });
 });
 
@@ -131,7 +186,13 @@ app.post('/api/projects/:id/members', async (c) => {
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(body.user_id).first<UserAccount>();
   if (!user) return c.json({ error: 'User not found' }, 404);
   const existing = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, body.user_id).first<ProjectMember>();
-  if (!existing) await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at) VALUES (?, ?, 'member', ?, NULL)").bind(projectId, body.user_id, new Date().toISOString()).run();
+  if (!existing) {
+    await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at) VALUES (?, ?, 'member', ?, NULL)").bind(projectId, body.user_id, new Date().toISOString()).run();
+    await Promise.all([
+      broadcast(c.env, `user:${body.user_id}`, { type: 'membership.added', project_id: projectId, user_id: body.user_id }),
+      broadcast(c.env, `project:${projectId}`, { type: 'member.added', project_id: projectId, user_id: body.user_id }),
+    ]);
+  }
   return c.json({ project_id: projectId, user_id: user.id, role: 'member', nickname: user.nickname }, existing ? 200 : 201);
 });
 
@@ -142,6 +203,10 @@ app.delete('/api/projects/:id/members/:userId', async (c) => {
   if (project.owner_id !== c.req.query('owner_id')) return c.json({ error: 'Only the owner can remove members' }, 403);
   if (c.req.param('userId') === project.owner_id) return c.json({ error: 'The owner cannot be removed' }, 400);
   await c.env.DB.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'").bind(projectId, c.req.param('userId')).run();
+  await Promise.all([
+    broadcast(c.env, `user:${c.req.param('userId')}`, { type: 'membership.removed', project_id: projectId, user_id: c.req.param('userId') }),
+    broadcast(c.env, `project:${projectId}`, { type: 'member.removed', project_id: projectId, user_id: c.req.param('userId') }),
+  ]);
   return c.json({ success: true });
 });
 
@@ -153,6 +218,7 @@ app.post('/api/projects/:id/leave', async (c) => {
   if (!project) return c.json({ error: 'Project not found' }, 404);
   if (project.owner_id === userId) return c.json({ error: 'The owner cannot leave the project' }, 400);
   await c.env.DB.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'").bind(projectId, userId).run();
+  await broadcast(c.env, `project:${projectId}`, { type: 'member.left', project_id: projectId, user_id: userId });
   return c.json({ success: true });
 });
 
@@ -172,6 +238,7 @@ app.put('/api/columns/:id', async (c) => {
     c.env.DB.prepare('UPDATE board_columns SET title = ?, updated_at = ? WHERE id = ?').bind(title, now, id),
     c.env.DB.prepare('UPDATE todos SET column_name = ?, updated_at = ? WHERE project_id = ? AND column_name = ?').bind(title, now, column.project_id, column.title),
   ]);
+  await broadcast(c.env, `project:${column.project_id}`, { type: 'column.updated', project_id: column.project_id });
   return c.json({ ...column, title, updated_at: now });
 });
 
@@ -182,6 +249,7 @@ app.post('/api/todos', async (c) => {
   const now = new Date().toISOString();
   const todo: TodoItem = { id: uuidv4(), project_id: body.project_id, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, assignee_id: body.user_id, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO todos (id, project_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
+  await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.created', project_id: todo.project_id, user_id: todo.user_id });
   return c.json(todo, 201);
 });
 
@@ -197,6 +265,7 @@ app.put('/api/todos/:id', async (c) => {
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
   const updated: TodoItem = { ...todo, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.updated_at, id).run();
+  await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.updated', project_id: todo.project_id });
   return c.json(updated);
 });
 
@@ -210,20 +279,22 @@ app.post('/api/todos/:id/comments', async (c) => {
   const body = await c.req.json() as { user_id?: string; body?: string };
   const commentBody = body.body?.trim();
   if (!body.user_id || !commentBody) return c.json({ error: 'user_id and body are required' }, 400);
-  const todo = await c.env.DB.prepare('SELECT id FROM todos WHERE id = ?').bind(todoId).first<Pick<TodoItem, 'id'>>();
+  const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(todoId).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
   const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: body.user_id, body: commentBody, created_at: new Date().toISOString() };
   await c.env.DB.prepare('INSERT INTO todo_comments (id, todo_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)').bind(comment.id, comment.todo_id, comment.user_id, comment.body, comment.created_at).run();
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(comment.user_id).first<UserAccount>();
+  await broadcast(c.env, `project:${todo.project_id}`, { type: 'comment.created', project_id: todo.project_id, user_id: comment.user_id });
   return c.json({ ...comment, nickname: user?.nickname ?? null }, 201);
 });
 
 app.delete('/api/todos/:id', async (c) => {
   const id = c.req.param('id');
+  const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
   await c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id = ?').bind(id).run();
   const result = await c.env.DB.prepare('DELETE FROM todos WHERE id = ?').bind(id).run();
+  if (result.meta.changes && todo) await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.deleted', project_id: todo.project_id });
   return result.meta.changes ? c.json({ success: true }) : c.json({ error: 'Todo not found' }, 404);
 });
 
-app.get('/ws', (c) => c.text('WebSocket endpoint not supported in this environment'));
 export default app;

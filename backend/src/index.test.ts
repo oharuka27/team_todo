@@ -141,6 +141,17 @@ class MemoryD1 {
   }
 }
 
+class MemoryRealtime {
+  messages: Array<{ channel: string; event: { type: string; project_id?: string; user_id?: string } }> = []
+  idFromName(name: string) { return name }
+  get(channel: string) {
+    return { fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.body) this.messages.push({ channel, event: JSON.parse(String(init.body)) })
+      return new Response(null, { status: 204 })
+    } }
+  }
+}
+
 const jsonRequest = (body: unknown, method = 'POST'): RequestInit => ({
   method,
   headers: { 'Content-Type': 'application/json' },
@@ -149,11 +160,13 @@ const jsonRequest = (body: unknown, method = 'POST'): RequestInit => ({
 
 describe('Team Todo API', () => {
   let database: MemoryD1
-  let environment: { DB: D1Database; ENVIRONMENT: string }
+  let realtime: MemoryRealtime
+  let environment: { DB: D1Database; ENVIRONMENT: string; REALTIME: DurableObjectNamespace }
 
   beforeEach(() => {
     database = new MemoryD1()
-    environment = { DB: database as unknown as D1Database, ENVIRONMENT: 'test' }
+    realtime = new MemoryRealtime()
+    environment = { DB: database as unknown as D1Database, ENVIRONMENT: 'test', REALTIME: realtime as unknown as DurableObjectNamespace }
   })
 
   it('ニックネームを整形してユーザー登録する', async () => {
@@ -269,6 +282,10 @@ describe('Team Todo API', () => {
     const addResponse = await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
     expect(addResponse.status).toBe(201)
     expect(await addResponse.json()).toMatchObject({ user_id: 'member-1', nickname: '佐藤', role: 'member' })
+    expect(realtime.messages).toEqual(expect.arrayContaining([
+      { channel: 'user:member-1', event: { type: 'membership.added', project_id: project.id, user_id: 'member-1' } },
+      { channel: `project:${project.id}`, event: { type: 'member.added', project_id: project.id, user_id: 'member-1' } },
+    ]))
 
     const notificationResponse = await app.request('/api/users/member-1/project-notifications', undefined, environment)
     expect(await notificationResponse.json()).toEqual([{ project_id: project.id, project_name: '共同プロジェクト' }])
@@ -277,6 +294,13 @@ describe('Team Todo API', () => {
     expect(acknowledgeResponse.status).toBe(200)
     const afterAcknowledge = await app.request('/api/users/member-1/project-notifications', undefined, environment)
     expect(await afterAcknowledge.json()).toEqual([])
+  })
+
+  it('プロジェクトに所属しないユーザーのリアルタイム接続を拒否する', async () => {
+    const createResponse = await app.request('/api/projects', jsonRequest({ name: '限定プロジェクト', user_id: 'owner-1' }), environment)
+    const project = await createResponse.json() as { id: string }
+    const response = await app.request(`/api/realtime/projects/${project.id}?user_id=outsider-1`, { headers: { Upgrade: 'websocket' } }, environment)
+    expect(response.status).toBe(403)
   })
 
   it('オーナーによるメンバー削除とメンバー自身の脱退に対応する', async () => {
