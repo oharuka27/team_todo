@@ -73,6 +73,15 @@ cd backend
 npm test
 ```
 
+### テスト結果のメール通知
+
+GitHub Actionsは、push時にfrontend/backendのテスト件数と結果をメール送信します。リポジトリの `Settings` → `Secrets and variables` → `Actions` で、次のRepository secretsを設定してください。
+
+- `MAIL_USERNAME`: 送信元のGmailアドレス
+- `MAIL_PASSWORD`: Googleアカウントで発行したアプリパスワード
+
+通常のGoogleアカウントパスワードは登録しないでください。メールは `xxx@gmail.com` 宛てに送信されます。
+
 ### バックエンド
 
 ```bash
