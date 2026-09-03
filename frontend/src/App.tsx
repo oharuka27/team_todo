@@ -9,6 +9,10 @@ const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: numbe
 
 function App() {
   const [userId] = useState(() => localStorage.getItem('userId') || `user_${Math.random().toString(36).slice(2, 9)}`)
+  const [nickname, setNickname] = useState(() => localStorage.getItem('nickname') || '')
+  const [nicknameInput, setNicknameInput] = useState('')
+  const [isRegistering, setIsRegistering] = useState(false)
+  const [registrationError, setRegistrationError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -22,6 +26,7 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
+    if (!nickname) return
     apiClient.getProjects(userId).then((data) => {
       setProjects(data)
       setSelectedProjectId((current) => current ?? data[0]?.id ?? null)
@@ -29,7 +34,7 @@ function App() {
       setProjects([])
       setSelectedProjectId(null)
     })
-  }, [userId])
+  }, [userId, nickname])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -63,7 +68,26 @@ function App() {
     }
   }
 
+  const registerAccount = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const value = nicknameInput.trim()
+    if (!value || isRegistering) return
+    setIsRegistering(true)
+    setRegistrationError(null)
+    try {
+      const account = await apiClient.registerUser(userId, value)
+      localStorage.setItem('nickname', account.nickname)
+      setNickname(account.nickname)
+      setNicknameInput('')
+    } catch {
+      setRegistrationError('アカウントを登録できませんでした。バックエンドへの接続を確認して、もう一度お試しください。')
+    } finally {
+      setIsRegistering(false)
+    }
+  }
+
   const selectedProject = projects.find((project) => project.id === selectedProjectId)
+  const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
 
   const openDeleteDialog = (project: Project) => {
     setContextMenu(null)
@@ -116,14 +140,29 @@ function App() {
           </nav>
           <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>
-        {projects.length > 0 && <div className="sidebar-footer"><span className="avatar">{userId.slice(-2).toUpperCase()}</span><div><strong>マイワークスペース</strong><small>オンライン</small></div></div>}
+        {nickname && <div className="sidebar-footer"><span className="avatar">{nicknameInitial}</span><div><strong>{nickname}</strong><small>オンライン</small></div></div>}
       </aside>
 
       <main className="main-area">
-        {selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} /> : (
+        {selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} /> : (
           <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
         )}
       </main>
+
+      {!nickname && (
+        <div className="modal-backdrop account-backdrop">
+          <div className="modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-registration-title">
+            <div className="account-symbol"><Icon size={28}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></Icon></div>
+            <div className="account-heading"><span className="eyebrow">WELCOME</span><h2 id="account-registration-title">アカウント登録</h2><p>はじめに、Team Todoで使用するニックネームを入力してください。</p></div>
+            <form onSubmit={registerAccount}>
+              <label>ニックネーム<input autoFocus maxLength={40} value={nicknameInput} onChange={(event) => setNicknameInput(event.target.value)} placeholder="例：山田" disabled={isRegistering} /></label>
+              <p className="account-hint">先頭の1文字がタスクのアサイン表示に使用されます。</p>
+              {registrationError && <p className="delete-error" role="alert">{registrationError}</p>}
+              <button type="submit" className="primary-button account-submit" disabled={!nicknameInput.trim() || isRegistering}>{isRegistering ? '登録中…' : '登録する'}</button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {contextMenu && (
         <div className="project-context-menu" role="menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 180), top: Math.min(contextMenu.y, window.innerHeight - 56) }} onClick={(event) => event.stopPropagation()}>

@@ -10,6 +10,13 @@ export interface Project {
   updated_at: string;
 }
 
+export interface UserAccount {
+  id: string;
+  nickname: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TodoItem {
   id: string;
   project_id: string;
@@ -62,6 +69,10 @@ class ApiClient {
       console.error(`API Error [${method} ${path}]:`, error);
       throw error;
     }
+  }
+
+  async registerUser(id: string, nickname: string): Promise<UserAccount> {
+    return this.request('POST', '/api/users', { id, nickname });
   }
 
   // Project APIs

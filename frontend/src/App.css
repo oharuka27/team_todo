@@ -32,4 +32,12 @@
 .danger-button:hover:not(:disabled) { background:#b33c3c; }
 .danger-button:disabled { opacity:.45;cursor:not-allowed; }
 .delete-error { margin:-7px 0 0;color:#b33c3c;font-size:12px; }
+.account-backdrop { z-index:40;background:rgba(20,48,52,.42); }
+.account-modal { width:min(430px,100%);text-align:center; }
+.account-symbol { width:58px;height:58px;display:grid;place-items:center;margin:0 auto 15px;color:#fff;background:linear-gradient(145deg,#42bfa0,#49a7c9);border-radius:17px;box-shadow:0 9px 22px rgba(56,164,148,.24); }
+.account-heading h2 { margin:4px 0 8px; }
+.account-heading p { margin:0 0 22px;color:#71838b;font-size:13px;line-height:1.65; }
+.account-modal form { text-align:left; }
+.account-hint { margin:-9px 0 0;color:#82969b;font-size:11px; }
+.account-submit { width:100%;margin-top:3px; }
 @media (max-width: 720px) { .sidebar { width:76px;flex-basis:76px;padding:0 10px; }.brand>span:last-child,.sidebar-heading>span:first-child,.project-name,.add-project-button:not(svg),.sidebar-footer div { display:none; }.brand { justify-content:center;padding:0; }.sidebar-heading { justify-content:center; }.project-item { justify-content:center;padding:6px; }.add-project-button { justify-content:center; }.sidebar-footer { justify-content:center;padding:0; } }

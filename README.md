@@ -86,6 +86,12 @@ npm run dev
 
 ## 🔧 API エンドポイント
 
+### ユーザーAPI
+
+```
+POST   /api/users                 # ニックネームを登録
+```
+
 ### プロジェクトAPI
 
 ```
@@ -113,6 +119,12 @@ PUT    /api/columns/:id           # 列のタイトル更新
 ```
 
 ## 🗄️ データベーススキーマ
+
+### users テーブル
+- `id`: ユーザーID（主キー）
+- `nickname`: ニックネーム
+- `created_at`: 作成日時
+- `updated_at`: 更新日時
 
 ### projects テーブル
 - `id`: プロジェクトID（主キー）

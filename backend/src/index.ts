@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 interface Bindings { DB: D1Database; ENVIRONMENT: string }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
+interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; created_at: string; updated_at: string }
 
@@ -11,6 +12,22 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use('*', cors());
 app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+app.post('/api/users', async (c) => {
+  const body = await c.req.json() as { id?: string; nickname?: string };
+  const id = body.id?.trim();
+  const nickname = body.nickname?.trim();
+  if (!id || !nickname) return c.json({ error: 'id and nickname are required' }, 400);
+  if (nickname.length > 40) return c.json({ error: 'nickname must be 40 characters or fewer' }, 400);
+
+  const now = new Date().toISOString();
+  const existing = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserAccount>();
+  if (existing) return c.json(existing);
+
+  const user: UserAccount = { id, nickname, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO users (id, nickname, created_at, updated_at) VALUES (?, ?, ?, ?)').bind(user.id, user.nickname, now, now).run();
+  return c.json(user, 201);
+});
 
 app.post('/api/projects', async (c) => {
   const body = await c.req.json() as { name?: string; description?: string; user_id?: string };

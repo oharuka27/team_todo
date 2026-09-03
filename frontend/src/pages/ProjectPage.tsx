@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiClient, type BoardColumn, type Project, type TodoItem } from '../services/api'
 import '../styles/ProjectPage.css'
 
-interface ProjectPageProps { project: Project; userId: string }
+interface ProjectPageProps { project: Project; userId: string; nickname: string }
 const defaultColumns = (): BoardColumn[] => [
   { id: 'todo', title: 'To Do', position: 0 }, { id: 'progress', title: 'In Progress', position: 1 },
   { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
 ]
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 
-export default function ProjectPage({ project, userId }: ProjectPageProps) {
+export default function ProjectPage({ project, userId, nickname }: ProjectPageProps) {
+  const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
   const [addingTo, setAddingTo] = useState<string | null>(null)
@@ -91,7 +92,7 @@ export default function ProjectPage({ project, userId }: ProjectPageProps) {
                 {columnTodos(column.title).map((todo) => (
                   <div className="todo-card" key={todo.id} draggable onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
                     <button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button><p>{todo.title}</p>
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar">{userId.slice(-1).toUpperCase()}</span></div>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar" title={`担当: ${nickname}`}>{nicknameInitial}</span></div>
                   </div>
                 ))}
                 {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
