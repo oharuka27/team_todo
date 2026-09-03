@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import './App.css'
 import ProjectPage from './pages/ProjectPage'
 import { apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
@@ -34,6 +34,8 @@ function App() {
   const [memberError, setMemberError] = useState<string | null>(null)
   const [projectToLeave, setProjectToLeave] = useState<Project | null>(null)
   const [leaveConfirmation, setLeaveConfirmation] = useState('')
+  const [draggedProject, setDraggedProject] = useState<{ id: string; group: 'owner' | 'member' } | null>(null)
+  const [dropPreview, setDropPreview] = useState<{ group: 'owner' | 'member'; index: number } | null>(null)
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
@@ -236,11 +238,36 @@ function App() {
     finally { setIsDeleting(false) }
   }
 
-  const renderProjectItems = (items: Project[], offset: number) => items.map((project, index) => (
-    <button key={project.id} className={`project-item ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(project.id)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ project, x: event.clientX, y: event.clientY }) }}>
-      <span className={`project-icon project-icon-${(index + offset) % 4}`} aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
-    </button>
-  ))
+  const reorderProjects = async (group: 'owner' | 'member', targetIndex: number) => {
+    if (!draggedProject || draggedProject.group !== group) return
+    const groupProjects = group === 'owner' ? ownerProjects : memberProjects
+    const sourceIndex = groupProjects.findIndex((project) => project.id === draggedProject.id)
+    if (sourceIndex < 0) return
+    const reordered = [...groupProjects]
+    const [moved] = reordered.splice(sourceIndex, 1)
+    const insertIndex = Math.max(0, Math.min(targetIndex - (sourceIndex < targetIndex ? 1 : 0), reordered.length))
+    reordered.splice(insertIndex, 0, moved)
+    setDraggedProject(null); setDropPreview(null)
+    if (reordered.every((project, index) => project.id === groupProjects[index]?.id)) return
+    const previous = projects
+    setProjects(group === 'owner' ? [...reordered, ...memberProjects] : [...ownerProjects, ...reordered])
+    try { await apiClient.updateProjectOrder(userId, group, reordered.map((project) => project.id)) }
+    catch { setProjects(previous) }
+  }
+
+  const renderDropZone = (group: 'owner' | 'member', index: number) => (
+    <div className={`project-drop-zone ${dropPreview?.group === group && dropPreview.index === index ? 'active' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (draggedProject?.group === group) setDropPreview({ group, index }) }} onDragOver={(event) => { if (draggedProject?.group === group) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void reorderProjects(group, index) }} aria-hidden="true" />
+  )
+
+  const renderProjectItems = (items: Project[], offset: number, group: 'owner' | 'member') => <>
+    {items.map((project, index) => <Fragment key={project.id}>
+      {renderDropZone(group, index)}
+      <button draggable className={`project-item ${project.id === selectedProjectId ? 'active' : ''} ${draggedProject?.id === project.id ? 'dragging' : ''}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', project.id); setDraggedProject({ id: project.id, group }) }} onDragEnd={() => { setDraggedProject(null); setDropPreview(null) }} onClick={() => setSelectedProjectId(project.id)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ project, x: event.clientX, y: event.clientY }) }}>
+        <span className={`project-icon project-icon-${(index + offset) % 4}`} aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
+      </button>
+    </Fragment>)}
+    {renderDropZone(group, items.length)}
+  </>
 
   return (
     <div className="workspace">
@@ -249,8 +276,8 @@ function App() {
         <div className="sidebar-section">
           <div className="sidebar-heading"><span>プロジェクト</span><span className="project-count">{projects.length}</span></div>
           <nav className="project-list" aria-label="プロジェクト一覧">
-            <div className="project-group"><div className="project-group-heading"><span>オーナープロジェクト</span><b>{ownerProjects.length}</b></div>{renderProjectItems(ownerProjects, 0)}</div>
-            <div className="project-group"><div className="project-group-heading"><span>メンバープロジェクト</span><b>{memberProjects.length}</b></div>{renderProjectItems(memberProjects, ownerProjects.length)}</div>
+            <div className="project-group"><div className="project-group-heading"><span>オーナープロジェクト</span><b>{ownerProjects.length}</b></div>{renderProjectItems(ownerProjects, 0, 'owner')}</div>
+            <div className="project-group"><div className="project-group-heading"><span>メンバープロジェクト</span><b>{memberProjects.length}</b></div>{renderProjectItems(memberProjects, ownerProjects.length, 'member')}</div>
           </nav>
           <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>

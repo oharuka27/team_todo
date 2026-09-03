@@ -43,6 +43,11 @@ class MemoryD1 {
   }
 
   first(sql: string, params: unknown[]) {
+    if (sql.includes('MAX(sort_order)')) {
+      const role = sql.includes("role = 'owner'") ? 'owner' : 'member'
+      const orders = this.members.filter((row) => row.user_id === params[0] && row.role === role).map((row) => Number(row.sort_order ?? 0))
+      return { next_order: orders.length ? Math.max(...orders) + 1 : 0 }
+    }
     if (sql.includes('FROM users WHERE id')) return this.users.find((row) => row.id === params[0])
     if (sql.includes('SELECT id FROM projects')) {
       const row = this.projects.find((item) => item.id === params[0])
@@ -59,6 +64,8 @@ class MemoryD1 {
     if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
     if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
     if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => ({ ...member, nickname: this.users.find((user) => user.id === member.user_id)?.nickname }))
+    if (sql.includes('FROM projects WHERE owner_id')) return this.projects.filter((project) => project.owner_id === params[0])
+    if (sql.includes('FROM projects p JOIN project_members pm')) return this.members.filter((member) => member.user_id === params[0]).map((member) => this.projects.find((project) => project.id === member.project_id)).filter((project) => project && (sql.includes('p.owner_id <> ?') ? project.owner_id !== params[1] : project.owner_id === params[1]))
     if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
     if (sql.includes('SELECT DISTINCT p.* FROM projects')) {
       return this.projects.filter((project) => project.owner_id === params[0] || this.members.some((member) => member.project_id === project.id && member.user_id === params[1]))
@@ -77,8 +84,13 @@ class MemoryD1 {
       this.projects.push({ id: params[0], name: params[1], description: params[2], owner_id: params[3], created_at: params[4], updated_at: params[5] })
       return 1
     }
+    if (sql.startsWith('INSERT OR IGNORE INTO project_members')) {
+      if (this.members.some((member) => member.project_id === params[0] && member.user_id === params[1])) return 0
+      this.members.push({ project_id: params[0], user_id: params[1], role: 'owner', created_at: params[2], notified_at: params[3], sort_order: params[4] })
+      return 1
+    }
     if (sql.startsWith('INSERT INTO project_members')) {
-      this.members.push({ project_id: params[0], user_id: params[1], role: sql.includes("'member'") ? 'member' : 'owner', created_at: params[2], notified_at: sql.includes("'member'") ? null : params[2] })
+      this.members.push({ project_id: params[0], user_id: params[1], role: sql.includes("'member'") ? 'member' : 'owner', created_at: params[2], notified_at: sql.includes("'member'") ? null : params[2], sort_order: params[3] })
       return 1
     }
     if (sql.startsWith('INSERT INTO board_columns')) {
@@ -109,6 +121,12 @@ class MemoryD1 {
       const member = this.members.find((row) => row.project_id === params[1] && row.user_id === params[2] && row.role === 'member')
       if (!member) return 0
       member.notified_at = params[0]
+      return 1
+    }
+    if (sql.startsWith('UPDATE project_members SET sort_order')) {
+      const member = this.members.find((row) => row.project_id === params[1] && row.user_id === params[2])
+      if (!member) return 0
+      member.sort_order = params[0]
       return 1
     }
     if (sql.startsWith('DELETE FROM todos WHERE id')) return this.remove(this.todos, 'id', params[0])
@@ -204,6 +222,22 @@ describe('Team Todo API', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ id: project.id, name: '変更後' })
     expect(database.projects[0].name).toBe('変更後')
+  })
+
+  it('同じグループ内のプロジェクト表示順を保存する', async () => {
+    const firstResponse = await app.request('/api/projects', jsonRequest({ name: '一番目', user_id: 'user-1' }), environment)
+    const secondResponse = await app.request('/api/projects', jsonRequest({ name: '二番目', user_id: 'user-1' }), environment)
+    const first = await firstResponse.json() as { id: string }
+    const second = await secondResponse.json() as { id: string }
+    database.members.splice(database.members.findIndex((member) => member.project_id === first.id), 1)
+
+    const response = await app.request('/api/users/user-1/project-order', jsonRequest({ user_id: 'user-1', group: 'owner', project_ids: [second.id, first.id] }, 'PUT'), environment)
+
+    expect(response.status).toBe(200)
+    expect(database.members.find((member) => member.project_id === second.id)?.sort_order).toBe(0)
+    expect(database.members.find((member) => member.project_id === first.id)?.sort_order).toBe(1)
+    const invalidResponse = await app.request('/api/users/user-1/project-order', jsonRequest({ user_id: 'user-1', group: 'owner', project_ids: [second.id, 'member-project'] }, 'PUT'), environment)
+    expect(invalidResponse.status).toBe(400)
   })
 
   it('タスクを作成し、状態を変更して削除する', async () => {

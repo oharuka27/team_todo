@@ -142,6 +142,10 @@ class ApiClient {
     return this.request('GET', `/api/projects?user_id=${userId}`);
   }
 
+  async updateProjectOrder(userId: string, group: 'owner' | 'member', projectIds: string[]): Promise<{ success: boolean }> {
+    return this.request('PUT', `/api/users/${encodeURIComponent(userId)}/project-order`, { user_id: userId, group, project_ids: projectIds });
+  }
+
   async getProject(projectId: string): Promise<Project> {
     return this.request('GET', `/api/projects/${projectId}`);
   }

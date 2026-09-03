@@ -18,6 +18,7 @@ vi.mock('./services/api', () => ({
     deleteTodo: vi.fn(),
     updateTodo: vi.fn(),
     updateColumn: vi.fn(),
+    updateProjectOrder: vi.fn(),
     getProjectNotifications: vi.fn(),
     acknowledgeProjectNotifications: vi.fn(),
     getUsers: vi.fn(),
@@ -51,6 +52,7 @@ describe('App', () => {
     mockedApi.getProjectNotifications.mockResolvedValue([])
     mockedApi.getUsers.mockResolvedValue([])
     mockedApi.getProjectMembers.mockResolvedValue([])
+    mockedApi.updateProjectOrder.mockResolvedValue({ success: true })
     userSocket = websocketStub()
     mockedApi.connectUserEvents.mockReturnValue(userSocket)
     mockedApi.connectProjectEvents.mockImplementation(() => websocketStub())
@@ -73,6 +75,24 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '実行' }))
 
     await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith('owner-project', 'user-test', 'member-1'))
+  })
+
+  it('ドラッグ位置を表示し、オーナープロジェクトの表示順を変更する', async () => {
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.getProjects.mockResolvedValue([project('owner-1', '第一プロジェクト'), project('owner-2', '第二プロジェクト')])
+    const { container } = render(<App />)
+    const second = await screen.findByRole('button', { name: '第二プロジェクト' })
+    const firstDropZone = container.querySelector('.project-drop-zone') as HTMLElement
+    const dataTransfer = { effectAllowed: '', setData: vi.fn() }
+
+    fireEvent.dragStart(second, { dataTransfer })
+    fireEvent.dragEnter(firstDropZone, { dataTransfer })
+    expect(firstDropZone).toHaveClass('active')
+    fireEvent.drop(firstDropZone, { dataTransfer })
+
+    await waitFor(() => expect(mockedApi.updateProjectOrder).toHaveBeenCalledWith('user-test', 'owner', ['owner-2', 'owner-1']))
+    const projectNames = Array.from(container.querySelectorAll('.project-item .project-name'))
+    expect(projectNames.map((name) => name.textContent)).toEqual(['第二プロジェクト', '第一プロジェクト'])
   })
 
   it('招待通知を確認してからメンバープロジェクトを表示する', async () => {

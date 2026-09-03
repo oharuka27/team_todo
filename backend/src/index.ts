@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
 interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
-interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null }
+interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
@@ -110,6 +110,7 @@ app.post('/api/projects', async (c) => {
   if (!name || !userId) return c.json({ error: 'name and user_id are required' }, 400);
 
   const now = new Date().toISOString();
+  const order = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_members WHERE user_id = ? AND role = 'owner'").bind(userId).first<{ next_order: number }>();
   const project: Project = { id: uuidv4(), name, description: body.description?.trim() || null, owner_id: userId, created_at: now, updated_at: now };
   const columns = [
     { id: uuidv4(), title: 'To Do', position: 0 },
@@ -120,7 +121,7 @@ app.post('/api/projects', async (c) => {
 
   await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(project.id, project.name, project.description, project.owner_id, now, now),
-    c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)").bind(project.id, userId, now),
+    c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, sort_order) VALUES (?, ?, 'owner', ?, ?)").bind(project.id, userId, now, order?.next_order ?? 0),
     ...columns.map((column) => c.env.DB.prepare('INSERT INTO board_columns (id, project_id, title, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(column.id, project.id, column.title, column.position, now, now)),
   ]);
   return c.json(project, 201);
@@ -129,8 +130,33 @@ app.post('/api/projects', async (c) => {
 app.get('/api/projects', async (c) => {
   const userId = c.req.query('user_id');
   if (!userId) return c.json({ error: 'user_id is required' }, 400);
-  const { results } = await c.env.DB.prepare(`SELECT DISTINCT p.* FROM projects p LEFT JOIN project_members pm ON pm.project_id = p.id WHERE p.owner_id = ? OR pm.user_id = ? ORDER BY p.created_at ASC`).bind(userId, userId).all<Project>();
+  const { results } = await c.env.DB.prepare(`SELECT DISTINCT p.*, COALESCE(pm.sort_order, 0) AS sort_order FROM projects p LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ? WHERE p.owner_id = ? OR pm.user_id = ? ORDER BY sort_order ASC, p.created_at ASC`).bind(userId, userId, userId).all<Project & { sort_order: number }>();
   return c.json(results);
+});
+
+app.put('/api/users/:userId/project-order', async (c) => {
+  const userId = c.req.param('userId');
+  const body = await c.req.json() as { user_id?: string; group?: 'owner' | 'member'; project_ids?: string[] };
+  if (body.user_id !== userId) return c.json({ error: 'Forbidden' }, 403);
+  if (!['owner', 'member'].includes(body.group ?? '') || !Array.isArray(body.project_ids)) return c.json({ error: 'group and project_ids are required' }, 400);
+  if (new Set(body.project_ids).size !== body.project_ids.length) return c.json({ error: 'project_ids must be unique' }, 400);
+
+  const { results } = body.group === 'owner'
+    ? await c.env.DB.prepare('SELECT id, owner_id, created_at FROM projects WHERE owner_id = ?').bind(userId).all<Pick<Project, 'id' | 'owner_id' | 'created_at'>>()
+    : await c.env.DB.prepare('SELECT p.id, p.owner_id, p.created_at FROM projects p JOIN project_members pm ON pm.project_id = p.id WHERE pm.user_id = ? AND p.owner_id <> ?').bind(userId, userId).all<Pick<Project, 'id' | 'owner_id' | 'created_at'>>();
+  const expectedIds = new Set(results.map((project) => project.id));
+  if (body.project_ids.length !== expectedIds.size || body.project_ids.some((id) => !expectedIds.has(id))) return c.json({ error: 'Projects must stay within their group' }, 400);
+
+  const statements = body.project_ids.flatMap((projectId, index) => {
+    const project = results.find((item) => item.id === projectId)!;
+    return body.group === 'owner' ? [
+      c.env.DB.prepare("INSERT OR IGNORE INTO project_members (project_id, user_id, role, created_at, notified_at, sort_order) VALUES (?, ?, 'owner', ?, ?, ?)").bind(projectId, userId, project.created_at, project.created_at, index),
+      c.env.DB.prepare('UPDATE project_members SET sort_order = ? WHERE project_id = ? AND user_id = ?').bind(index, projectId, userId),
+    ] : [c.env.DB.prepare('UPDATE project_members SET sort_order = ? WHERE project_id = ? AND user_id = ?').bind(index, projectId, userId)];
+  });
+  await c.env.DB.batch(statements);
+  await broadcast(c.env, `user:${userId}`, { type: 'project.order.updated', user_id: userId });
+  return c.json({ success: true });
 });
 
 app.get('/api/projects/:id', async (c) => {
@@ -187,7 +213,8 @@ app.post('/api/projects/:id/members', async (c) => {
   if (!user) return c.json({ error: 'User not found' }, 404);
   const existing = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, body.user_id).first<ProjectMember>();
   if (!existing) {
-    await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at) VALUES (?, ?, 'member', ?, NULL)").bind(projectId, body.user_id, new Date().toISOString()).run();
+    const order = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_members WHERE user_id = ? AND role = 'member'").bind(body.user_id).first<{ next_order: number }>();
+    await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at, sort_order) VALUES (?, ?, 'member', ?, NULL, ?)").bind(projectId, body.user_id, new Date().toISOString(), order?.next_order ?? 0).run();
     await Promise.all([
       broadcast(c.env, `user:${body.user_id}`, { type: 'membership.added', project_id: projectId, user_id: body.user_id }),
       broadcast(c.env, `project:${projectId}`, { type: 'member.added', project_id: projectId, user_id: body.user_id }),
