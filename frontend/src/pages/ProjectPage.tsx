@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient, type BoardColumn, type Project, type TodoItem } from '../services/api'
+import { apiClient, type BoardColumn, type Project, type TodoItem, type UserAccount } from '../services/api'
 import TaskDetailModal from '../components/TaskDetailModal'
 import '../styles/ProjectPage.css'
 
@@ -11,9 +11,9 @@ const defaultColumns = (): BoardColumn[] => [
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 
 export default function ProjectPage({ project, userId, nickname, onProjectUpdated }: ProjectPageProps) {
-  const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
+  const [users, setUsers] = useState<UserAccount[]>([])
   const [addingTo, setAddingTo] = useState<string | null>(null)
   const [newTodoText, setNewTodoText] = useState('')
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
@@ -31,11 +31,15 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
   const [realtimeRevision, setRealtimeRevision] = useState(0)
 
   useEffect(() => {
-    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
-      .then(([todoData, columnData]) => { setTodos(todoData); setColumns(columnData.length ? columnData : defaultColumns()) })
+    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers()])
+      .then(([todoData, columnData, userData]) => {
+        setTodos(todoData)
+        setColumns(columnData.length ? columnData : defaultColumns())
+        setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, created_at: '', updated_at: '' }])
+      })
       .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('オフラインモードで表示しています') })
       .finally(() => setLoading(false))
-  }, [project.id])
+  }, [project.id, userId, nickname])
 
   useEffect(() => {
     if (typeof apiClient.connectProjectEvents !== 'function') return
@@ -76,6 +80,11 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
 
   const filteredTodos = useMemo(() => todos.filter((todo) => todo.title.toLowerCase().includes(query.toLowerCase())), [todos, query])
   const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
+  const assigneeDisplay = (todo: TodoItem) => {
+    if (!todo.assignee_id) return { initial: '未', name: '未アサイン', unassigned: true }
+    const name = users.find((user) => user.id === todo.assignee_id)?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
+    return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, unassigned: false }
+  }
 
   const addTodo = async (columnTitle: string) => {
     if (!newTodoText.trim()) return
@@ -193,7 +202,9 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
                 <button className="more-button" aria-label="列のメニュー">•••</button>
               </div>
               <div className="todo-list">
-                {columnTodos(column.title).map((todo) => (
+                {columnTodos(column.title).map((todo) => {
+                  const assignee = assigneeDisplay(todo)
+                  return (
                   <div className={`todo-card ${editingTodoId === todo.id ? 'editing' : ''}`} key={todo.id} draggable={editingTodoId !== todo.id} role="button" tabIndex={0} aria-label={`${todo.title}の詳細を開く`} onClick={() => { if (editingTodoId !== todo.id) setSelectedTodoId(todo.id) }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedTodoId(todo.id) } }} onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
                     {editingTodoId === todo.id ? (
                       <form className="todo-title-editor" onSubmit={(event) => { event.preventDefault(); saveTodoTitle(todo) }}>
@@ -201,9 +212,10 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
                         <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
                       </form>
                     ) : <><div className="todo-actions"><button className="delete-todo" onClick={(event) => { event.stopPropagation(); deleteTodo(todo.id) }} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={(event) => { event.stopPropagation(); startTodoEdit(todo) }} aria-label={`${todo.title}を編集`}>✎</button></div></>}
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar" title={`担当: ${nickname}`}>{nicknameInitial}</span></div>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
                   </div>
-                ))}
+                  )
+                })}
                 {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
               </div>
               {addingTo === column.id ? (

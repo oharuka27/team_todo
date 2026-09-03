@@ -34,6 +34,7 @@ const todo = (id: string, title: string, columnName = 'To Do'): TodoItem => ({
   status: 'not_started',
   column_name: columnName,
   user_id: 'user-1',
+  assignee_id: 'user-1',
   created_at: now,
   updated_at: now,
 })
@@ -87,6 +88,22 @@ describe('ProjectPage', () => {
 
     await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-1', { column_name: 'In Progress' }))
     expect(within(progressColumn).getByText('移動するタスク')).toBeInTheDocument()
+  })
+
+  it('担当者の先頭文字を表示し、未アサインは灰色の「未」にする', async () => {
+    mockedApi.getUsers.mockResolvedValue([
+      { id: 'user-1', nickname: '山田', created_at: now, updated_at: now },
+      { id: 'user-2', nickname: '佐藤', created_at: now, updated_at: now },
+    ])
+    mockedApi.getTodos.mockResolvedValue([
+      { ...todo('todo-1', '佐藤担当'), assignee_id: 'user-2' },
+      { ...todo('todo-2', '未担当'), assignee_id: null },
+    ])
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    expect(await screen.findByTitle('担当: 佐藤')).toHaveTextContent('佐')
+    expect(screen.getByTitle('担当: 未アサイン')).toHaveTextContent('未')
+    expect(screen.getByTitle('担当: 未アサイン')).toHaveClass('unassigned')
   })
 
   it('検索文字に一致するタスクだけを表示する', async () => {
