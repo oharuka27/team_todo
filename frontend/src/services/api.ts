@@ -92,6 +92,10 @@ class ApiClient {
     return this.request('PUT', `/api/projects/${projectId}`, updates);
   }
 
+  async deleteProject(projectId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/projects/${projectId}`);
+  }
+
   // Todo APIs
   async createTodo(
     projectId: string,

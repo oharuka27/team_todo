@@ -14,6 +14,11 @@ function App() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
@@ -25,6 +30,22 @@ function App() {
       setSelectedProjectId(null)
     })
   }, [userId])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const closeMenu = () => setContextMenu(null)
+    const closeMenuWithEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') closeMenu() }
+    window.addEventListener('click', closeMenu)
+    window.addEventListener('scroll', closeMenu, true)
+    window.addEventListener('resize', closeMenu)
+    window.addEventListener('keydown', closeMenuWithEscape)
+    return () => {
+      window.removeEventListener('click', closeMenu)
+      window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('resize', closeMenu)
+      window.removeEventListener('keydown', closeMenuWithEscape)
+    }
+  }, [contextMenu])
 
   const createProject = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -44,6 +65,42 @@ function App() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId)
 
+  const openDeleteDialog = (project: Project) => {
+    setContextMenu(null)
+    setProjectToDelete(project)
+    setDeleteConfirmation('')
+    setDeleteError(null)
+  }
+
+  const closeDeleteDialog = () => {
+    if (isDeleting) return
+    setProjectToDelete(null)
+    setDeleteConfirmation('')
+    setDeleteError(null)
+  }
+
+  const deleteProject = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!projectToDelete || deleteConfirmation !== '削除' || isDeleting) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await apiClient.deleteProject(projectToDelete.id)
+      const deletedIndex = projects.findIndex((project) => project.id === projectToDelete.id)
+      const remainingProjects = projects.filter((project) => project.id !== projectToDelete.id)
+      setProjects(remainingProjects)
+      if (selectedProjectId === projectToDelete.id) {
+        setSelectedProjectId(remainingProjects[Math.min(deletedIndex, remainingProjects.length - 1)]?.id ?? null)
+      }
+      setProjectToDelete(null)
+      setDeleteConfirmation('')
+    } catch {
+      setDeleteError('プロジェクトを削除できませんでした。時間をおいてもう一度お試しください。')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   return (
     <div className="workspace">
       <aside className="sidebar">
@@ -52,7 +109,7 @@ function App() {
           <div className="sidebar-heading"><span>プロジェクト</span><span className="project-count">{projects.length}</span></div>
           <nav className="project-list" aria-label="プロジェクト一覧">
             {projects.map((project, index) => (
-              <button key={project.id} className={`project-item ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(project.id)}>
+              <button key={project.id} className={`project-item ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(project.id)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ project, x: event.clientX, y: event.clientY }) }}>
                 <span className={`project-icon project-icon-${index % 4}`}>{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
               </button>
             ))}
@@ -68,6 +125,12 @@ function App() {
         )}
       </main>
 
+      {contextMenu && (
+        <div className="project-context-menu" role="menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 180), top: Math.min(contextMenu.y, window.innerHeight - 56) }} onClick={(event) => event.stopPropagation()}>
+          <button role="menuitem" onClick={() => openDeleteDialog(contextMenu.project)}><span aria-hidden="true">×</span>削除</button>
+        </div>
+      )}
+
       {isCreateOpen && (
         <div className="modal-backdrop" onMouseDown={() => setIsCreateOpen(false)}>
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="create-project-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -76,6 +139,21 @@ function App() {
               <label>プロジェクト名<input autoFocus value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="例：Webサイトリニューアル" /></label>
               <p className="enter-hint">Enterキーでも作成できます</p>
               <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : '決定'}</button></div>
+            </form>
+          </div>
+        </div>
+      )}
+
+
+      {projectToDelete && (
+        <div className="modal-backdrop" onMouseDown={closeDeleteDialog}>
+          <div className="modal delete-project-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div><span className="eyebrow danger-eyebrow">DELETE PROJECT</span><h2 id="delete-project-title">「{projectToDelete.name}」を削除</h2></div><button className="icon-button" onClick={closeDeleteDialog} aria-label="閉じる" disabled={isDeleting}>×</button></div>
+            <form onSubmit={deleteProject}>
+              <p className="delete-warning">この操作は取り消せません。プロジェクト内のタスクもすべて削除されます。</p>
+              <label>確認のため「削除」と入力して実行ボタンを押してください。<input autoFocus value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} disabled={isDeleting} /></label>
+              {deleteError && <p className="delete-error" role="alert">{deleteError}</p>}
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={closeDeleteDialog} disabled={isDeleting}>キャンセル</button><button type="submit" className="danger-button" disabled={deleteConfirmation !== '削除' || isDeleting}>{isDeleting ? '削除中…' : '実行'}</button></div>
             </form>
           </div>
         </div>

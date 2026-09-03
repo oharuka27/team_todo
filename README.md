@@ -93,6 +93,7 @@ POST   /api/projects              # プロジェクト作成
 GET    /api/projects              # プロジェクト一覧取得
 GET    /api/projects/:id          # プロジェクト詳細取得
 PUT    /api/projects/:id          # プロジェクト更新
+DELETE /api/projects/:id          # プロジェクト削除
 ```
 
 ### ToDoAPI

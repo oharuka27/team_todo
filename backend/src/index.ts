@@ -57,6 +57,24 @@ app.put('/api/projects/:id', async (c) => {
   return c.json(updated);
 });
 
+app.delete('/api/projects/:id', async (c) => {
+  const id = c.req.param('id');
+  const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(id).first<Pick<Project, 'id'>>();
+  // DELETE is idempotent. A project created by the frontend's offline fallback
+  // does not exist in D1, but removing it from the client is still successful.
+  if (!project) return c.json({ success: true });
+
+  // Delete dependants explicitly so this also works if foreign-key enforcement is
+  // disabled for an existing D1 database.
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM todos WHERE project_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM board_columns WHERE project_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id),
+  ]);
+  return c.json({ success: true });
+});
+
 app.get('/api/projects/:projectId/columns', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM board_columns WHERE project_id = ? ORDER BY position ASC').bind(c.req.param('projectId')).all<BoardColumn>();
   return c.json(results);
