@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiClient, type BoardColumn, type Project, type TodoItem } from '../services/api'
+import TaskDetailModal from '../components/TaskDetailModal'
 import '../styles/ProjectPage.css'
 
 interface ProjectPageProps { project: Project; userId: string; nickname: string; onProjectUpdated: (project: Project) => void }
@@ -20,6 +21,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null)
   const [editingTodoText, setEditingTodoText] = useState('')
   const [savingTodoId, setSavingTodoId] = useState<string | null>(null)
+  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
@@ -154,13 +156,13 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
               </div>
               <div className="todo-list">
                 {columnTodos(column.title).map((todo) => (
-                  <div className={`todo-card ${editingTodoId === todo.id ? 'editing' : ''}`} key={todo.id} draggable={editingTodoId !== todo.id} onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
+                  <div className={`todo-card ${editingTodoId === todo.id ? 'editing' : ''}`} key={todo.id} draggable={editingTodoId !== todo.id} role="button" tabIndex={0} aria-label={`${todo.title}の詳細を開く`} onClick={() => { if (editingTodoId !== todo.id) setSelectedTodoId(todo.id) }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedTodoId(todo.id) } }} onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
                     {editingTodoId === todo.id ? (
                       <form className="todo-title-editor" onSubmit={(event) => { event.preventDefault(); saveTodoTitle(todo) }}>
                         <input autoFocus aria-label="タスク名" value={editingTodoText} onChange={(event) => setEditingTodoText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') cancelTodoEdit() }} disabled={savingTodoId === todo.id} />
                         <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
                       </form>
-                    ) : <><div className="todo-actions"><button className="delete-todo" onClick={() => deleteTodo(todo.id)} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={() => startTodoEdit(todo)} aria-label={`${todo.title}を編集`}>✎</button></div></>}
+                    ) : <><div className="todo-actions"><button className="delete-todo" onClick={(event) => { event.stopPropagation(); deleteTodo(todo.id) }} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={(event) => { event.stopPropagation(); startTodoEdit(todo) }} aria-label={`${todo.title}を編集`}>✎</button></div></>}
                     <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className="mini-avatar" title={`担当: ${nickname}`}>{nicknameInitial}</span></div>
                   </div>
                 ))}
@@ -190,6 +192,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
           ))}
         </div>
       )}
+      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} userId={userId} nickname={nickname} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
     </section>
   )
 }

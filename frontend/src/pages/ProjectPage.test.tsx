@@ -14,6 +14,9 @@ vi.mock('../services/api', () => ({
     updateTodo: vi.fn(),
     updateColumn: vi.fn(),
     updateProject: vi.fn(),
+    getUsers: vi.fn(),
+    getTodoComments: vi.fn(),
+    createTodoComment: vi.fn(),
   },
 }))
 
@@ -41,6 +44,8 @@ describe('ProjectPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedApi.getColumns.mockResolvedValue(columns)
+    mockedApi.getUsers.mockResolvedValue([])
+    mockedApi.getTodoComments.mockResolvedValue([])
   })
 
   it('タスクを追加し、削除する', async () => {
@@ -112,6 +117,17 @@ describe('ProjectPage', () => {
     await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-1', { title: '変更後タスク' }))
     expect(screen.getByText('変更後タスク')).toBeInTheDocument()
     expect(screen.queryByText('変更前タスク')).not.toBeInTheDocument()
+  })
+
+  it('タスクカードをクリックして詳細画面を開く', async () => {
+    const user = userEvent.setup()
+    mockedApi.getTodos.mockResolvedValue([todo('todo-1', '詳細を開くタスク')])
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    await user.click(await screen.findByRole('button', { name: '詳細を開くタスクの詳細を開く' }))
+
+    expect(screen.getByRole('dialog', { name: '詳細を開くタスク' })).toBeInTheDocument()
+    expect(mockedApi.getTodoComments).toHaveBeenCalledWith('todo-1')
   })
 
   it('プロジェクト名を変更して保存する', async () => {

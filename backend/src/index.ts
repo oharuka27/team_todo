@@ -6,7 +6,8 @@ interface Bindings { DB: D1Database; ENVIRONMENT: string }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
 interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
-interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; created_at: string; updated_at: string }
+interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
+interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
 const app = new Hono<{ Bindings: Bindings }>();
 app.use('*', cors());
@@ -27,6 +28,11 @@ app.post('/api/users', async (c) => {
   const user: UserAccount = { id, nickname, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO users (id, nickname, created_at, updated_at) VALUES (?, ?, ?, ?)').bind(user.id, user.nickname, now, now).run();
   return c.json(user, 201);
+});
+
+app.get('/api/users', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM users ORDER BY nickname COLLATE NOCASE ASC').all<UserAccount>();
+  return c.json(results);
 });
 
 app.post('/api/projects', async (c) => {
@@ -84,6 +90,7 @@ app.delete('/api/projects/:id', async (c) => {
   // Delete dependants explicitly so this also works if foreign-key enforcement is
   // disabled for an existing D1 database.
   await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id IN (SELECT id FROM todos WHERE project_id = ?)').bind(id),
     c.env.DB.prepare('DELETE FROM todos WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM board_columns WHERE project_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ?').bind(id),
@@ -116,8 +123,8 @@ app.post('/api/todos', async (c) => {
   const title = body.title?.trim();
   if (!body.project_id || !title || !body.column_name || !body.user_id) return c.json({ error: 'project_id, title, column_name and user_id are required' }, 400);
   const now = new Date().toISOString();
-  const todo: TodoItem = { id: uuidv4(), project_id: body.project_id, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, created_at: now, updated_at: now };
-  await c.env.DB.prepare('INSERT INTO todos (id, project_id, title, description, status, column_name, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.created_at, todo.updated_at).run();
+  const todo: TodoItem = { id: uuidv4(), project_id: body.project_id, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, assignee_id: body.user_id, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO todos (id, project_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
   return c.json(todo, 201);
 });
 
@@ -128,16 +135,36 @@ app.get('/api/projects/:projectId/todos', async (c) => {
 
 app.put('/api/todos/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name'>>;
+  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name' | 'assignee_id'>>;
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
-  const updated: TodoItem = { ...todo, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, updated_at: new Date().toISOString() };
-  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.updated_at, id).run();
+  const updated: TodoItem = { ...todo, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
+  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.updated_at, id).run();
   return c.json(updated);
 });
 
+app.get('/api/todos/:id/comments', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT c.*, u.nickname FROM todo_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.todo_id = ? ORDER BY c.created_at ASC').bind(c.req.param('id')).all<TodoComment & { nickname: string | null }>();
+  return c.json(results);
+});
+
+app.post('/api/todos/:id/comments', async (c) => {
+  const todoId = c.req.param('id');
+  const body = await c.req.json() as { user_id?: string; body?: string };
+  const commentBody = body.body?.trim();
+  if (!body.user_id || !commentBody) return c.json({ error: 'user_id and body are required' }, 400);
+  const todo = await c.env.DB.prepare('SELECT id FROM todos WHERE id = ?').bind(todoId).first<Pick<TodoItem, 'id'>>();
+  if (!todo) return c.json({ error: 'Todo not found' }, 404);
+  const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: body.user_id, body: commentBody, created_at: new Date().toISOString() };
+  await c.env.DB.prepare('INSERT INTO todo_comments (id, todo_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)').bind(comment.id, comment.todo_id, comment.user_id, comment.body, comment.created_at).run();
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(comment.user_id).first<UserAccount>();
+  return c.json({ ...comment, nickname: user?.nickname ?? null }, 201);
+});
+
 app.delete('/api/todos/:id', async (c) => {
-  const result = await c.env.DB.prepare('DELETE FROM todos WHERE id = ?').bind(c.req.param('id')).run();
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id = ?').bind(id).run();
+  const result = await c.env.DB.prepare('DELETE FROM todos WHERE id = ?').bind(id).run();
   return result.meta.changes ? c.json({ success: true }) : c.json({ error: 'Todo not found' }, 404);
 });
 

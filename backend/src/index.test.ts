@@ -32,6 +32,7 @@ class MemoryD1 {
   members: Row[] = []
   columns: Row[] = []
   todos: Row[] = []
+  comments: Row[] = []
 
   prepare(sql: string) {
     return new MemoryStatement(this, sql)
@@ -54,6 +55,8 @@ class MemoryD1 {
   }
 
   all(sql: string, params: unknown[]) {
+    if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
+    if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
     if (sql.includes('SELECT DISTINCT p.* FROM projects')) {
       return this.projects.filter((project) => project.owner_id === params[0] || this.members.some((member) => member.project_id === project.id && member.user_id === params[1]))
     }
@@ -80,13 +83,17 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO todos')) {
-      this.todos.push({ id: params[0], project_id: params[1], title: params[2], description: params[3], status: params[4], column_name: params[5], user_id: params[6], created_at: params[7], updated_at: params[8] })
+      this.todos.push({ id: params[0], project_id: params[1], title: params[2], description: params[3], status: params[4], column_name: params[5], user_id: params[6], assignee_id: params[7], created_at: params[8], updated_at: params[9] })
+      return 1
+    }
+    if (sql.startsWith('INSERT INTO todo_comments')) {
+      this.comments.push({ id: params[0], todo_id: params[1], user_id: params[2], body: params[3], created_at: params[4] })
       return 1
     }
     if (sql.startsWith('UPDATE todos SET title')) {
-      const todo = this.todos.find((row) => row.id === params[5])
+      const todo = this.todos.find((row) => row.id === params[6])
       if (!todo) return 0
-      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], updated_at: params[4] })
+      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], assignee_id: params[4], updated_at: params[5] })
       return 1
     }
     if (sql.startsWith('UPDATE projects SET name')) {
@@ -96,6 +103,14 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('DELETE FROM todos WHERE id')) return this.remove(this.todos, 'id', params[0])
+    if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id IN')) {
+      const todoIds = new Set(this.todos.filter((todo) => todo.project_id === params[0]).map((todo) => todo.id))
+      const previousLength = this.comments.length
+      const remaining = this.comments.filter((comment) => !todoIds.has(comment.todo_id))
+      this.comments.splice(0, this.comments.length, ...remaining)
+      return previousLength - this.comments.length
+    }
+    if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id')) return this.remove(this.comments, 'todo_id', params[0])
     if (sql.startsWith('DELETE FROM todos WHERE project_id')) return this.remove(this.todos, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM board_columns WHERE project_id')) return this.remove(this.columns, 'project_id', params[0])
     if (sql.startsWith('DELETE FROM project_members WHERE project_id')) return this.remove(this.members, 'project_id', params[0])
@@ -186,6 +201,22 @@ describe('Team Todo API', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ id: created.id, title: '変更後タスク' })
     expect(database.todos[0].title).toBe('変更後タスク')
+  })
+
+  it('タスクの説明・担当者・コメントを保存する', async () => {
+    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'user-2', nickname: '佐藤' })
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', title: '詳細タスク', column_name: 'To Do', user_id: 'user-1' }), environment)
+    const created = await createResponse.json() as { id: string }
+
+    const updateResponse = await app.request(`/api/todos/${created.id}`, jsonRequest({ description: '詳細な説明', assignee_id: 'user-2' }, 'PUT'), environment)
+    expect(await updateResponse.json()).toMatchObject({ description: '詳細な説明', assignee_id: 'user-2', user_id: 'user-1' })
+
+    const commentResponse = await app.request(`/api/todos/${created.id}/comments`, jsonRequest({ user_id: 'user-1', body: '確認しました' }), environment)
+    expect(commentResponse.status).toBe(201)
+    expect(await commentResponse.json()).toMatchObject({ body: '確認しました', nickname: '山田' })
+
+    const listResponse = await app.request(`/api/todos/${created.id}/comments`, undefined, environment)
+    expect(await listResponse.json()).toEqual([expect.objectContaining({ body: '確認しました' })])
   })
 
   it('プロジェクト削除時に関連データも削除し、再実行も成功する', async () => {

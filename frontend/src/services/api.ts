@@ -25,8 +25,18 @@ export interface TodoItem {
   status: string;
   column_name: string;
   user_id: string;
+  assignee_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface TodoComment {
+  id: string;
+  todo_id: string;
+  user_id: string;
+  body: string;
+  nickname?: string | null;
+  created_at: string;
 }
 
 export interface BoardColumn {
@@ -73,6 +83,10 @@ class ApiClient {
 
   async registerUser(id: string, nickname: string): Promise<UserAccount> {
     return this.request('POST', '/api/users', { id, nickname });
+  }
+
+  async getUsers(): Promise<UserAccount[]> {
+    return this.request('GET', '/api/users');
   }
 
   // Project APIs
@@ -134,6 +148,14 @@ class ApiClient {
 
   async deleteTodo(todoId: string): Promise<{ success: boolean }> {
     return this.request('DELETE', `/api/todos/${todoId}`);
+  }
+
+  async getTodoComments(todoId: string): Promise<TodoComment[]> {
+    return this.request('GET', `/api/todos/${todoId}/comments`);
+  }
+
+  async createTodoComment(todoId: string, userId: string, body: string): Promise<TodoComment> {
+    return this.request('POST', `/api/todos/${todoId}/comments`, { user_id: userId, body });
   }
 
   // Column APIs

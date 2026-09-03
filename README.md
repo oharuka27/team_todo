@@ -134,6 +134,8 @@ POST   /api/todos                 # ToDoアイテム作成
 GET    /api/projects/:id/todos    # プロジェクトのToDoリスト取得
 PUT    /api/todos/:id             # ToDoアイテム更新
 DELETE /api/todos/:id             # ToDoアイテム削除
+GET    /api/todos/:id/comments    # コメント一覧取得
+POST   /api/todos/:id/comments    # コメント追加
 ```
 
 ### カラムAPI
@@ -167,8 +169,16 @@ PUT    /api/columns/:id           # 列のタイトル更新
 - `status`: ステータス
 - `column_name`: 列の名前
 - `user_id`: 作成ユーザーID
+- `assignee_id`: 担当ユーザーID
 - `created_at`: 作成日時
 - `updated_at`: 更新日時
+
+### todo_comments テーブル
+- `id`: コメントID（主キー）
+- `todo_id`: 対象タスクID
+- `user_id`: コメント投稿者ID
+- `body`: コメント本文
+- `created_at`: 作成日時
 
 ### board_columns テーブル
 - `id`: 列ID（主キー）
