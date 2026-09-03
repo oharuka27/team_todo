@@ -57,6 +57,15 @@ npm run dev
 
 開発サーバーは `http://localhost:5173` で起動します。
 
+### フロントエンドテスト
+
+```bash
+cd frontend
+npm test
+```
+
+開発中にテストを監視実行する場合は `npm run test:watch` を使用します。
+
 ### バックエンド
 
 ```bash

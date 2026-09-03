@@ -134,7 +134,7 @@ function App() {
           <nav className="project-list" aria-label="プロジェクト一覧">
             {projects.map((project, index) => (
               <button key={project.id} className={`project-item ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(project.id)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ project, x: event.clientX, y: event.clientY }) }}>
-                <span className={`project-icon project-icon-${index % 4}`}>{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
+                <span className={`project-icon project-icon-${index % 4}`} aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
               </button>
             ))}
           </nav>
