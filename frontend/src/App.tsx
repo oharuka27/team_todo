@@ -10,6 +10,7 @@ const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: numbe
 function App() {
   const [userId] = useState(() => localStorage.getItem('userId') || `user_${Math.random().toString(36).slice(2, 9)}`)
   const [nickname, setNickname] = useState(() => localStorage.getItem('nickname') || '')
+  const [avatarColor, setAvatarColor] = useState(() => localStorage.getItem('avatarColor') || '#4a9c9b')
   const [nicknameInput, setNicknameInput] = useState('')
   const [isRegistering, setIsRegistering] = useState(false)
   const [registrationError, setRegistrationError] = useState<string | null>(null)
@@ -37,6 +38,12 @@ function App() {
   const [draggedProject, setDraggedProject] = useState<{ id: string; group: 'owner' | 'member' } | null>(null)
   const [dropPreview, setDropPreview] = useState<{ group: 'owner' | 'member'; index: number } | null>(null)
   const [deletedProjectNotices, setDeletedProjectNotices] = useState<Array<{ project_id: string; project_name: string }>>([])
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [settingsNickname, setSettingsNickname] = useState('')
+  const [settingsColor, setSettingsColor] = useState('#4a9c9b')
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
 
   useEffect(() => {
     localStorage.setItem('userId', userId)
@@ -145,7 +152,9 @@ function App() {
     try {
       const account = await apiClient.registerUser(userId, value)
       localStorage.setItem('nickname', account.nickname)
+      localStorage.setItem('avatarColor', account.avatar_color || '#4a9c9b')
       setNickname(account.nickname)
+      setAvatarColor(account.avatar_color || '#4a9c9b')
       setNicknameInput('')
     } catch {
       setRegistrationError('アカウントを登録できませんでした。バックエンドへの接続を確認して、もう一度お試しください。')
@@ -161,6 +170,27 @@ function App() {
   const updateProjectInList = useCallback((updatedProject: Project) => {
     setProjects((items) => items.map((project) => project.id === updatedProject.id ? updatedProject : project))
   }, [])
+
+  const openUserSettings = () => {
+    setIsUserMenuOpen(false)
+    setSettingsNickname(nickname)
+    setSettingsColor(avatarColor)
+    setSettingsError(null)
+    setIsSettingsOpen(true)
+  }
+
+  const saveUserSettings = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!settingsNickname.trim() || isSavingSettings) return
+    setIsSavingSettings(true); setSettingsError(null)
+    try {
+      const updated = await apiClient.updateUser(userId, settingsNickname.trim(), settingsColor)
+      setNickname(updated.nickname); setAvatarColor(updated.avatar_color || settingsColor)
+      localStorage.setItem('nickname', updated.nickname); localStorage.setItem('avatarColor', updated.avatar_color || settingsColor)
+      setIsSettingsOpen(false)
+    } catch { setSettingsError('ユーザー設定を保存できませんでした。') }
+    finally { setIsSavingSettings(false) }
+  }
 
   const openDeleteDialog = (project: Project) => {
     setContextMenu(null)
@@ -290,11 +320,11 @@ function App() {
           </nav>
           <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>
-        {nickname && <div className="sidebar-footer"><span className="avatar">{nicknameInitial}</span><div><strong>{nickname}</strong><small>オンライン</small></div></div>}
+        {nickname && <div className="sidebar-footer"><button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">{nicknameInitial}</button><div><strong>{nickname}</strong><small>オンライン</small></div>{isUserMenuOpen && <div className="user-settings-menu" role="menu"><button role="menuitem" onClick={openUserSettings}>⚙ 設定</button></div>}</div>}
       </aside>
 
       <main className="main-area">
-        {!notificationsChecked && nickname ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} onProjectUpdated={updateProjectInList} /> : (
+        {!notificationsChecked && nickname ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} /> : (
           <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
         )}
       </main>
@@ -312,6 +342,10 @@ function App() {
             </form>
           </div>
         </div>
+      )}
+
+      {isSettingsOpen && (
+        <div className="modal-backdrop" onMouseDown={() => !isSavingSettings && setIsSettingsOpen(false)}><div className="modal user-settings-modal" role="dialog" aria-modal="true" aria-labelledby="user-settings-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><div><span className="eyebrow">USER SETTINGS</span><h2 id="user-settings-title">ユーザー設定</h2></div><button className="icon-button" aria-label="閉じる" onClick={() => setIsSettingsOpen(false)} disabled={isSavingSettings}>×</button></div><form onSubmit={saveUserSettings}><label>ユーザー名<input autoFocus maxLength={40} value={settingsNickname} onChange={(event) => setSettingsNickname(event.target.value)} disabled={isSavingSettings}/></label><fieldset className="color-settings"><legend>アイコンの背景色</legend><div className="color-preview"><span className="avatar" style={{ backgroundColor: settingsColor }}>{Array.from(settingsNickname.trim() || nickname)[0]?.toUpperCase() || '?'}</span><input type="color" aria-label="アイコンの背景色" value={settingsColor} onChange={(event) => setSettingsColor(event.target.value)} disabled={isSavingSettings}/><code>{settingsColor}</code></div></fieldset>{settingsError && <p className="delete-error" role="alert">{settingsError}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsSettingsOpen(false)} disabled={isSavingSettings}>キャンセル</button><button type="submit" className="primary-button" disabled={!settingsNickname.trim() || isSavingSettings}>{isSavingSettings ? '保存中…' : '保存'}</button></div></form></div></div>
       )}
 
       {contextMenu && (

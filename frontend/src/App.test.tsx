@@ -7,6 +7,7 @@ import { apiClient, type Project, type UserAccount } from './services/api'
 vi.mock('./services/api', () => ({
   apiClient: {
     registerUser: vi.fn(),
+    updateUser: vi.fn(),
     connectUserEvents: vi.fn(),
     connectProjectEvents: vi.fn(),
     getProjects: vi.fn(),
@@ -200,6 +201,25 @@ describe('App', () => {
     expect(screen.getByText('H')).toHaveClass('avatar')
     expect(localStorage.getItem('nickname')).toBe('Haruka')
     expect(mockedApi.registerUser).toHaveBeenCalledWith(expect.stringMatching(/^user_/), 'Haruka')
+  })
+
+  it('左下の設定メニューからユーザー名とアイコン背景色を変更する', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
+    mockedApi.updateUser.mockResolvedValue({ id: 'user-test', nickname: '佐藤', avatar_color: '#336699', created_at: now, updated_at: now })
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'ユーザーメニュー' }))
+    await user.click(screen.getByRole('menuitem', { name: /設定/ }))
+    const nicknameInput = screen.getByRole('textbox', { name: 'ユーザー名' })
+    await user.clear(nicknameInput)
+    await user.type(nicknameInput, '佐藤')
+    fireEvent.change(screen.getByLabelText('アイコンの背景色'), { target: { value: '#336699' } })
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mockedApi.updateUser).toHaveBeenCalledWith('user-test', '佐藤', '#336699'))
+    expect(screen.getByText('佐藤')).toBeInTheDocument()
+    expect(localStorage.getItem('avatarColor')).toBe('#336699')
   })
 
   it('プロジェクトを追加し、確認入力後に削除する', async () => {

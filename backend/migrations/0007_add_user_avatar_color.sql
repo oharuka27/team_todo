@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#4a9c9b';

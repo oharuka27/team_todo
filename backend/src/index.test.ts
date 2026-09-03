@@ -65,6 +65,7 @@ class MemoryD1 {
     if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
     if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => ({ ...member, nickname: this.users.find((user) => user.id === member.user_id)?.nickname }))
     if (sql.includes("SELECT user_id FROM project_members") && sql.includes("role = 'member'")) return this.members.filter((member) => member.project_id === params[0] && member.role === 'member').map((member) => ({ user_id: member.user_id }))
+    if (sql.includes('SELECT project_id FROM project_members')) return this.members.filter((member) => member.user_id === params[0]).map((member) => ({ project_id: member.project_id }))
     if (sql.includes('FROM projects WHERE owner_id')) return this.projects.filter((project) => project.owner_id === params[0])
     if (sql.includes('FROM projects p JOIN project_members pm')) return this.members.filter((member) => member.user_id === params[0]).map((member) => this.projects.find((project) => project.id === member.project_id)).filter((project) => project && (sql.includes('p.owner_id <> ?') ? project.owner_id !== params[1] : project.owner_id === params[1]))
     if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
@@ -78,7 +79,7 @@ class MemoryD1 {
 
   run(sql: string, params: unknown[]) {
     if (sql.startsWith('INSERT INTO users')) {
-      this.users.push({ id: params[0], nickname: params[1], created_at: params[2], updated_at: params[3] })
+      this.users.push({ id: params[0], nickname: params[1], avatar_color: params[2], created_at: params[3], updated_at: params[4] })
       return 1
     }
     if (sql.startsWith('INSERT INTO projects')) {
@@ -110,6 +111,12 @@ class MemoryD1 {
       const todo = this.todos.find((row) => row.id === params[6])
       if (!todo) return 0
       Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], assignee_id: params[4], updated_at: params[5] })
+      return 1
+    }
+    if (sql.startsWith('UPDATE users SET nickname')) {
+      const user = this.users.find((row) => row.id === params[3])
+      if (!user) return 0
+      Object.assign(user, { nickname: params[0], avatar_color: params[1], updated_at: params[2] })
       return 1
     }
     if (sql.startsWith('UPDATE projects SET name')) {
@@ -201,6 +208,15 @@ describe('Team Todo API', () => {
 
     expect(response.status).toBe(400)
     expect(database.users).toHaveLength(0)
+  })
+
+  it('ユーザー名とアイコン背景色を更新する', async () => {
+    await app.request('/api/users', jsonRequest({ id: 'user-1', nickname: '変更前' }), environment)
+    const response = await app.request('/api/users/user-1', jsonRequest({ user_id: 'user-1', nickname: '変更後', avatar_color: '#336699' }, 'PUT'), environment)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ nickname: '変更後', avatar_color: '#336699' })
+    expect(database.users[0]).toMatchObject({ nickname: '変更後', avatar_color: '#336699' })
   })
 
   it('プロジェクトと標準カラムを作成する', async () => {

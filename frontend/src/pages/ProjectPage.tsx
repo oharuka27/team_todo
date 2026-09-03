@@ -3,14 +3,14 @@ import { apiClient, type BoardColumn, type Project, type TodoItem, type UserAcco
 import TaskDetailModal from '../components/TaskDetailModal'
 import '../styles/ProjectPage.css'
 
-interface ProjectPageProps { project: Project; userId: string; nickname: string; onProjectUpdated: (project: Project) => void }
+interface ProjectPageProps { project: Project; userId: string; nickname: string; avatarColor?: string; onProjectUpdated: (project: Project) => void }
 const defaultColumns = (): BoardColumn[] => [
   { id: 'todo', title: 'To Do', position: 0 }, { id: 'progress', title: 'In Progress', position: 1 },
   { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
 ]
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 
-export default function ProjectPage({ project, userId, nickname, onProjectUpdated }: ProjectPageProps) {
+export default function ProjectPage({ project, userId, nickname, avatarColor = '#4a9c9b', onProjectUpdated }: ProjectPageProps) {
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
   const [users, setUsers] = useState<UserAccount[]>([])
@@ -35,11 +35,11 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
       .then(([todoData, columnData, userData]) => {
         setTodos(todoData)
         setColumns(columnData.length ? columnData : defaultColumns())
-        setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, created_at: '', updated_at: '' }])
+        setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
       })
       .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('オフラインモードで表示しています') })
       .finally(() => setLoading(false))
-  }, [project.id, userId, nickname])
+  }, [project.id, userId, nickname, avatarColor])
 
   useEffect(() => {
     if (typeof apiClient.connectProjectEvents !== 'function') return
@@ -52,10 +52,11 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
       try { type = (JSON.parse(String(event.data)) as { type?: string }).type ?? '' } catch { return }
       window.dispatchEvent(new Event('team-todo-refresh'))
       if (type === 'project.deleted') return
-      const [todoResult, columnResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id)])
+      const [todoResult, columnResult, userResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers()])
       if (!active) return
       if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
       if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
+      if (userResult.status === 'fulfilled') setUsers(userResult.value.some((user) => user.id === userId) ? userResult.value : [...userResult.value, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
       setRealtimeRevision((revision) => revision + 1)
       if (type === 'project.updated') {
         try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
@@ -76,14 +77,15 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
       if (retryId !== null) window.clearTimeout(retryId)
       socket?.close()
     }
-  }, [project.id, userId, onProjectUpdated])
+  }, [project.id, userId, nickname, avatarColor, onProjectUpdated])
 
   const filteredTodos = useMemo(() => todos.filter((todo) => todo.title.toLowerCase().includes(query.toLowerCase())), [todos, query])
   const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
   const assigneeDisplay = (todo: TodoItem) => {
     if (!todo.assignee_id) return { initial: '未', name: '未アサイン', unassigned: true }
     const name = users.find((user) => user.id === todo.assignee_id)?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
-    return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, unassigned: false }
+    const color = users.find((user) => user.id === todo.assignee_id)?.avatar_color ?? (todo.assignee_id === userId ? avatarColor : '#d9eee8')
+    return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, color, unassigned: false }
   }
 
   const addTodo = async (columnTitle: string) => {
@@ -212,7 +214,7 @@ export default function ProjectPage({ project, userId, nickname, onProjectUpdate
                         <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
                       </form>
                     ) : <><div className="todo-actions"><button className="delete-todo" onClick={(event) => { event.stopPropagation(); deleteTodo(todo.id) }} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={(event) => { event.stopPropagation(); startTodoEdit(todo) }} aria-label={`${todo.title}を編集`}>✎</button></div></>}
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} style={assignee.unassigned ? undefined : { backgroundColor: assignee.color }} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
                   </div>
                   )
                 })}

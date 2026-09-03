@@ -13,6 +13,7 @@ export interface Project {
 export interface UserAccount {
   id: string;
   nickname: string;
+  avatar_color?: string;
   created_at: string;
   updated_at: string;
 }
@@ -115,6 +116,10 @@ class ApiClient {
 
   async getUsers(): Promise<UserAccount[]> {
     return this.request('GET', '/api/users');
+  }
+
+  async updateUser(id: string, nickname: string, avatarColor: string): Promise<UserAccount> {
+    return this.request('PUT', `/api/users/${encodeURIComponent(id)}`, { user_id: id, nickname, avatar_color: avatarColor });
   }
 
   async getProjectNotifications(userId: string): Promise<ProjectNotification[]> {

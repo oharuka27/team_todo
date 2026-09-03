@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
-interface UserAccount { id: string; nickname: string; created_at: string; updated_at: string }
+interface UserAccount { id: string; nickname: string; avatar_color?: string; created_at: string; updated_at: string }
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
 interface TodoItem { id: string; project_id: string; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
@@ -79,9 +79,29 @@ app.post('/api/users', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserAccount>();
   if (existing) return c.json(existing);
 
-  const user: UserAccount = { id, nickname, created_at: now, updated_at: now };
-  await c.env.DB.prepare('INSERT INTO users (id, nickname, created_at, updated_at) VALUES (?, ?, ?, ?)').bind(user.id, user.nickname, now, now).run();
+  const user: UserAccount = { id, nickname, avatar_color: '#4a9c9b', created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO users (id, nickname, avatar_color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').bind(user.id, user.nickname, user.avatar_color, now, now).run();
   return c.json(user, 201);
+});
+
+app.put('/api/users/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json() as { user_id?: string; nickname?: string; avatar_color?: string };
+  if (body.user_id !== id) return c.json({ error: 'Forbidden' }, 403);
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserAccount>();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  const nickname = body.nickname?.trim();
+  if (!nickname || nickname.length > 40) return c.json({ error: 'nickname must be between 1 and 40 characters' }, 400);
+  const avatarColor = body.avatar_color?.trim();
+  if (!avatarColor || !/^#[0-9a-fA-F]{6}$/.test(avatarColor)) return c.json({ error: 'avatar_color must be a hex color' }, 400);
+  const updated = { ...user, nickname, avatar_color: avatarColor.toLowerCase(), updated_at: new Date().toISOString() };
+  await c.env.DB.prepare('UPDATE users SET nickname = ?, avatar_color = ?, updated_at = ? WHERE id = ?').bind(updated.nickname, updated.avatar_color, updated.updated_at, id).run();
+  const { results: memberships } = await c.env.DB.prepare('SELECT project_id FROM project_members WHERE user_id = ?').bind(id).all<Pick<ProjectMember, 'project_id'>>();
+  await Promise.all([
+    broadcast(c.env, `user:${id}`, { type: 'user.updated', user_id: id }),
+    ...memberships.map((membership) => broadcast(c.env, `project:${membership.project_id}`, { type: 'user.updated', project_id: membership.project_id, user_id: id })),
+  ]);
+  return c.json(updated);
 });
 
 app.get('/api/users', async (c) => {
