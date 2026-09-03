@@ -84,13 +84,43 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('button', { name: 'トピック' }))
     await user.type(screen.getByRole('textbox', { name: 'トピック名' }), 'フロントエンド')
     await user.click(screen.getByRole('button', { name: 'トピックを作成' }))
-    await user.click(await screen.findByRole('button', { name: /タスクを追加/ }))
+    const topicCard = (await screen.findByRole('heading', { name: 'フロントエンド' })).closest('.topic-card') as HTMLElement
+    await user.click(within(topicCard).getByRole('button', { name: /タスクを追加/ }))
     await user.type(screen.getByRole('textbox', { name: 'フロントエンドのタスク名' }), '画面を作る')
     await user.click(screen.getByRole('button', { name: '追加' }))
 
     expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', 'user-1', undefined, topic.id)
     await user.click(await screen.findByRole('button', { name: /画面を作る/ }))
     expect(screen.getByRole('dialog', { name: '画面を作る' })).toBeInTheDocument()
+  })
+
+  it('無所属タスクを作成し、ドラッグ＆ドロップでトピックへ移動する', async () => {
+    const user = userEvent.setup()
+    const topic = { id: 'topic-1', project_id: project.id, name: '移動先', created_at: now, updated_at: now }
+    mockedApi.getTopics.mockResolvedValue([topic])
+    mockedApi.getTodos.mockResolvedValue([])
+    mockedApi.createTodo.mockResolvedValue({ ...todo('todo-free', '無所属タスク'), topic_id: null })
+    mockedApi.updateTodo.mockResolvedValue({ ...todo('todo-free', '無所属タスク'), topic_id: topic.id })
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    await user.click(screen.getByRole('button', { name: 'トピック' }))
+    const unassignedCard = (await screen.findByRole('heading', { name: '無所属' })).closest('.topic-card') as HTMLElement
+    await user.click(within(unassignedCard).getByRole('button', { name: /タスクを追加/ }))
+    await user.type(within(unassignedCard).getByRole('textbox', { name: '無所属のタスク名' }), '無所属タスク')
+    await user.click(within(unassignedCard).getByRole('button', { name: '追加' }))
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'To Do', 'user-1', undefined, null)
+
+    const taskButton = await within(unassignedCard).findByRole('button', { name: /無所属タスク/ })
+    const targetCard = screen.getByRole('heading', { name: '移動先' }).closest('.topic-card') as HTMLElement
+    const collapseButton = within(targetCard).getByRole('button', { name: '移動先を折りたたむ' })
+    await user.click(collapseButton)
+    expect(within(targetCard).getByRole('button', { name: '移動先を展開' })).toHaveAttribute('aria-expanded', 'false')
+    const dataTransfer = { effectAllowed: '', setData: vi.fn() }
+    fireEvent.dragStart(taskButton, { dataTransfer })
+    fireEvent.dragEnter(targetCard, { dataTransfer })
+    expect(targetCard).toHaveClass('drop-target')
+    fireEvent.drop(targetCard, { dataTransfer })
+    await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-free', { topic_id: topic.id }))
   })
 
   it('ドラッグ＆ドロップでタスクの状態を変更する', async () => {

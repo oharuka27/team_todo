@@ -19,6 +19,9 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const [newTopicName, setNewTopicName] = useState('')
   const [addingTopicTaskId, setAddingTopicTaskId] = useState<string | null>(null)
   const [newTopicTaskTitle, setNewTopicTaskTitle] = useState('')
+  const [draggedTopicTodoId, setDraggedTopicTodoId] = useState<string | null>(null)
+  const [topicDropTarget, setTopicDropTarget] = useState<string | null>(null)
+  const [collapsedTopicIds, setCollapsedTopicIds] = useState<string[]>([])
   const [addingTo, setAddingTo] = useState<string | null>(null)
   const [newTodoText, setNewTodoText] = useState('')
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
@@ -166,12 +169,30 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     try { const created = await apiClient.createTopic(project.id, name); setTopics((items) => [...items, created]); setNewTopicName('') }
     catch { setNotice('トピックを作成できませんでした') }
   }
-  const createTopicTask = async (topicId: string) => {
+  const createTopicTask = async (topicId: string | null) => {
     const title = newTopicTaskTitle.trim(); if (!title) return
     try {
       const created = await apiClient.createTodo(project.id, title, 'To Do', userId, undefined, topicId)
       setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
     } catch { setNotice('タスクを作成できませんでした') }
+  }
+  const moveTodoToTopic = async (topicId: string | null) => {
+    if (!draggedTopicTodoId) return
+    const target = todos.find((todo) => todo.id === draggedTopicTodoId)
+    setDraggedTopicTodoId(null); setTopicDropTarget(null)
+    if (!target || (target.topic_id ?? null) === topicId) return
+    const previous = todos
+    setTodos((items) => items.map((todo) => todo.id === target.id ? { ...todo, topic_id: topicId } : todo))
+    try { await apiClient.updateTodo(target.id, { topic_id: topicId }) }
+    catch { setTodos(previous) }
+  }
+
+  const renderTopicSection = (topic: Topic | null) => {
+    const topicKey = topic?.id ?? 'unassigned'
+    const topicName = topic?.name ?? '無所属'
+    const topicTodos = todos.filter((todo) => (todo.topic_id ?? null) === (topic?.id ?? null))
+    const collapsed = topic ? collapsedTopicIds.includes(topic.id) : false
+    return <section className={`topic-card ${collapsed ? 'collapsed' : ''} ${topicDropTarget === topicKey ? 'drop-target' : ''}`} key={topicKey} onDragEnter={(event) => { if (draggedTopicTodoId) { event.preventDefault(); setTopicDropTarget(topicKey) } }} onDragOver={(event) => { if (draggedTopicTodoId) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void moveTodoToTopic(topic?.id ?? null) }}><header>{topic ? <button className="topic-collapse-button" aria-expanded={!collapsed} aria-label={`${topicName}を${collapsed ? '展開' : '折りたたむ'}`} onClick={() => setCollapsedTopicIds((ids) => ids.includes(topic.id) ? ids.filter((id) => id !== topic.id) : [...ids, topic.id])}><span className="topic-chevron">⌄</span><span className="topic-heading"><small>TOPIC</small><h2>{topicName}</h2></span></button> : <div><span>NO TOPIC</span><h2>{topicName}</h2></div>}<b>{topicTodos.length}</b></header>{!collapsed && <div className="topic-tasks">{topicTodos.map((todo) => <button draggable key={todo.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', todo.id); setDraggedTopicTodoId(todo.id) }} onDragEnd={() => { setDraggedTopicTodoId(null); setTopicDropTarget(null) }} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topicKey ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic?.id ?? null) }}><input autoFocus aria-label={`${topicName}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topicKey); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div>}</section>
   }
 
   const cancelProjectNameEdit = () => {
@@ -265,7 +286,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
             </article>
           ))}
         </div>
-      ) : <div className="topics-page"><form className="topic-create-form" onSubmit={createTopic}><input aria-label="トピック名" value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder="新しいトピック名"/><button type="submit" disabled={!newTopicName.trim()}>トピックを作成</button></form><div className="topic-list">{topics.length ? topics.map((topic) => <section className="topic-card" key={topic.id}><header><div><span>TOPIC</span><h2>{topic.name}</h2></div><b>{todos.filter((todo) => todo.topic_id === topic.id).length}</b></header><div className="topic-tasks">{todos.filter((todo) => todo.topic_id === topic.id).map((todo) => <button key={todo.id} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topic.id ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic.id) }}><input autoFocus aria-label={`${topic.name}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topic.id); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div></section>) : <div className="empty-topics"><p>トピックはまだありません</p><span>上のフォームから最初のトピックを作成してください。</span></div>}</div></div>}
+      ) : <div className="topics-page"><form className="topic-create-form" onSubmit={createTopic}><input aria-label="トピック名" value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder="新しいトピック名"/><button type="submit" disabled={!newTopicName.trim()}>トピックを作成</button></form><div className="topic-columns"><div className="topic-list topic-list-owned">{topics.length ? topics.map(renderTopicSection) : <div className="empty-topics"><p>トピックはまだありません</p><span>上のフォームから最初のトピックを作成してください。</span></div>}</div><aside className="unassigned-topic-area" aria-label="無所属タスク">{renderTopicSection(null)}</aside></div></div>}
       {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} topics={topics} userId={userId} nickname={nickname} refreshToken={realtimeRevision} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
     </section>
   )
