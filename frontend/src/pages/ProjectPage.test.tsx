@@ -85,6 +85,9 @@ describe('ProjectPage', () => {
 
     render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
     await screen.findByText('既存タスク')
+    const firstColumn = screen.getByText('To Do').closest('.kanban-column') as HTMLElement
+    const addArea = within(firstColumn).getByRole('button', { name: 'タスクを追加、またはドラッグ' })
+    expect(addArea).toBe(firstColumn.querySelector('.todo-list')?.lastElementChild)
     await user.click(screen.getAllByRole('button', { name: /タスクを追加/ })[0])
     await user.type(screen.getByPlaceholderText('タスク名を入力'), '追加タスク')
     await user.click(screen.getByRole('button', { name: '追加' }))

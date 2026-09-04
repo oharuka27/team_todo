@@ -349,28 +349,27 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
                   </div>
                   )
                 })}
-                {columnTodos(column.title).length === 0 && addingTo !== column.id && <div className="empty-column">ここにタスクを追加、またはドラッグ</div>}
+                {addingTo === column.id ? (
+                  <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}>
+                    <textarea
+                      autoFocus
+                      value={newTodoText}
+                      onChange={(e) => setNewTodoText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                          e.preventDefault()
+                          addTodo(column.title)
+                        }
+                        if (e.key === 'Escape') setAddingTo(null)
+                      }}
+                      placeholder="タスク名を入力"
+                    />
+                    <div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div>
+                  </form>
+                ) : (
+                  <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span aria-hidden="true">＋</span>タスクを追加、またはドラッグ</button>
+                )}
               </div>
-              {addingTo === column.id ? (
-                <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}>
-                  <textarea
-                    autoFocus
-                    value={newTodoText}
-                    onChange={(e) => setNewTodoText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                        e.preventDefault()
-                        addTodo(column.title)
-                      }
-                      if (e.key === 'Escape') setAddingTo(null)
-                    }}
-                    placeholder="タスク名を入力"
-                  />
-                  <div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div>
-                </form>
-              ) : (
-                <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span>＋</span> タスクを追加</button>
-              )}
             </article>
           ))}
         </div>
