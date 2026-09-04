@@ -10,6 +10,14 @@ const defaultColumns = (): BoardColumn[] => [
 ]
 const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
 const TOPIC_COLORS = ['#5baF9f', '#5f91c9', '#8b78c6', '#d1849f', '#dc8b62', '#d2aa45', '#73a95c', '#4ea4b8', '#9a8068', '#7c8da8']
+const avatarTextColor = (backgroundColor: string) => {
+  const hex = backgroundColor.match(/^#([0-9a-f]{6})$/i)?.[1]
+  if (!hex) return '#29464b'
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
+  const [red, green, blue] = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+  return luminance > 0.45 ? '#29464b' : '#ffffff'
+}
 
 export default function ProjectPage({ project, userId, nickname, avatarColor = '#4a9c9b', onProjectUpdated }: ProjectPageProps) {
   const [todos, setTodos] = useState<TodoItem[]>([])
@@ -104,7 +112,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   }, [members, project.owner_id, users])
   const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
   const assigneeDisplay = (todo: TodoItem) => {
-    if (!todo.assignee_id) return { initial: '未', name: '未アサイン', unassigned: true }
+    if (!todo.assignee_id) return { initial: '未', name: '未アサイン', color: '#a8b0b3', unassigned: true }
     const name = users.find((user) => user.id === todo.assignee_id)?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
     const color = users.find((user) => user.id === todo.assignee_id)?.avatar_color ?? (todo.assignee_id === userId ? avatarColor : '#d9eee8')
     return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, color, unassigned: false }
@@ -308,7 +316,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
                         <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
                       </form>
                     ) : <><div className="todo-actions"><button className="delete-todo" onClick={(event) => { event.stopPropagation(); deleteTodo(todo.id) }} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={(event) => { event.stopPropagation(); startTodoEdit(todo) }} aria-label={`${todo.title}を編集`}>✎</button></div></>}
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`todo-topic-label ${topic.unassigned ? 'unassigned' : ''}`} style={topic.unassigned ? undefined : { color: topic.color, backgroundColor: `${topic.color}18`, borderColor: `${topic.color}55` }} title={`トピック: ${topic.name}`}><i style={topic.unassigned ? undefined : { backgroundColor: topic.color }}/>{topic.name}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} style={assignee.unassigned ? undefined : { backgroundColor: assignee.color }} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
+                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`todo-topic-label ${topic.unassigned ? 'unassigned' : ''}`} style={topic.unassigned ? undefined : { color: topic.color, backgroundColor: `${topic.color}18`, borderColor: `${topic.color}55` }} title={`トピック: ${topic.name}`}><i style={topic.unassigned ? undefined : { backgroundColor: topic.color }}/>{topic.name}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} style={assignee.unassigned ? undefined : { backgroundColor: assignee.color, color: avatarTextColor(assignee.color) }} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
                   </div>
                   )
                 })}

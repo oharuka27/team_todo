@@ -199,6 +199,22 @@ describe('ProjectPage', () => {
     expect(screen.getByTitle('担当: 未アサイン')).toHaveClass('unassigned')
   })
 
+  it('担当者アイコンの文字色を背景色の明るさに合わせる', async () => {
+    mockedApi.getUsers.mockResolvedValue([
+      { id: 'user-dark', nickname: '暗色', avatar_color: '#123456', created_at: now, updated_at: now },
+      { id: 'user-light', nickname: '明色', avatar_color: '#f2e9a1', created_at: now, updated_at: now },
+    ])
+    mockedApi.getTodos.mockResolvedValue([
+      { ...todo('todo-dark', '暗い背景'), assignee_id: 'user-dark' },
+      { ...todo('todo-light', '明るい背景'), assignee_id: 'user-light' },
+    ])
+
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    expect(await screen.findByTitle('担当: 暗色')).toHaveStyle({ backgroundColor: '#123456', color: '#ffffff' })
+    expect(screen.getByTitle('担当: 明色')).toHaveStyle({ backgroundColor: '#f2e9a1', color: '#29464b' })
+  })
+
   it('タスクカードに所属トピックと無所属を表示する', async () => {
     const topic = { id: 'topic-1', project_id: project.id, name: 'フロントエンド', color: '#336699', created_at: now, updated_at: now }
     mockedApi.getTopics.mockResolvedValue([topic])
