@@ -246,6 +246,58 @@ describe('ProjectPage', () => {
     expect(screen.queryByText('設計書を作る')).not.toBeInTheDocument()
   })
 
+  it('担当者を指定してタスクを絞り込む', async () => {
+    const user = userEvent.setup()
+    mockedApi.getProjectMembers.mockResolvedValue([
+      { project_id: project.id, user_id: 'user-1', role: 'owner', nickname: '山田' },
+      { project_id: project.id, user_id: 'user-2', role: 'member', nickname: '佐藤' },
+    ])
+    mockedApi.getTodos.mockResolvedValue([
+      { ...todo('todo-1', '山田のタスク'), assignee_id: 'user-1' },
+      { ...todo('todo-2', '佐藤のタスク'), assignee_id: 'user-2' },
+      { ...todo('todo-3', '未担当タスク'), assignee_id: null },
+    ])
+
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+    await screen.findByText('佐藤のタスク')
+    await user.click(screen.getByRole('button', { name: /担当者.*すべての担当者/ }))
+    const allCheckbox = screen.getByRole('checkbox', { name: 'すべての担当者' })
+    expect(allCheckbox).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '未アサイン' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '山田' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '佐藤' })).toBeChecked()
+
+    await user.click(allCheckbox)
+    expect(screen.getByRole('checkbox', { name: '未アサイン' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '山田' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '佐藤' })).not.toBeChecked()
+    expect(screen.queryByText('山田のタスク')).not.toBeInTheDocument()
+    expect(screen.queryByText('佐藤のタスク')).not.toBeInTheDocument()
+    expect(screen.queryByText('未担当タスク')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: '佐藤' }))
+
+    expect(screen.getByText('佐藤のタスク')).toBeInTheDocument()
+    expect(screen.queryByText('山田のタスク')).not.toBeInTheDocument()
+    expect(screen.queryByText('未担当タスク')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: '未アサイン' }))
+    expect(screen.getByText('佐藤のタスク')).toBeInTheDocument()
+    expect(screen.getByText('未担当タスク')).toBeInTheDocument()
+    expect(screen.queryByText('山田のタスク')).not.toBeInTheDocument()
+  })
+
+  it('担当者フィルターの外側をクリックするとメニューを閉じる', async () => {
+    const user = userEvent.setup()
+    mockedApi.getTodos.mockResolvedValue([])
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    await user.click(screen.getByRole('button', { name: /担当者.*すべての担当者/ }))
+    expect(screen.getByRole('group', { name: '担当者で絞り込む' })).toBeInTheDocument()
+    await user.click(document.body)
+    expect(screen.queryByRole('group', { name: '担当者で絞り込む' })).not.toBeInTheDocument()
+  })
+
   it('編集アイコンからタスク名を変更する', async () => {
     const user = userEvent.setup()
     mockedApi.getTodos.mockResolvedValue([todo('todo-1', '変更前タスク')])

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient, type BoardColumn, type Project, type ProjectMember, type TodoItem, type Topic, type UserAccount } from '../services/api'
 import TaskDetailModal from '../components/TaskDetailModal'
 import '../styles/ProjectPage.css'
@@ -41,6 +41,8 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const [savingTodoId, setSavingTodoId] = useState<string | null>(null)
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [assigneeFilters, setAssigneeFilters] = useState<string[]>(['all'])
+  const [isAssigneeFilterOpen, setIsAssigneeFilterOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
   const [isEditingProjectName, setIsEditingProjectName] = useState(false)
@@ -51,6 +53,16 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
   const [isAddingMembers, setIsAddingMembers] = useState(false)
   const [memberError, setMemberError] = useState<string | null>(null)
+  const assigneeFilterRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isAssigneeFilterOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!assigneeFilterRef.current?.contains(event.target as Node)) setIsAssigneeFilterOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [isAssigneeFilterOpen])
 
   useEffect(() => {
     Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers(), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
@@ -105,7 +117,11 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     }
   }, [project.id, userId, nickname, avatarColor, onProjectUpdated])
 
-  const filteredTodos = useMemo(() => todos.filter((todo) => todo.title.toLowerCase().includes(query.toLowerCase())), [todos, query])
+  const filteredTodos = useMemo(() => todos.filter((todo) => {
+    const matchesQuery = todo.title.toLowerCase().includes(query.toLowerCase())
+    const matchesAssignee = assigneeFilters.includes('all') || (assigneeFilters.includes('unassigned') && !todo.assignee_id) || (!!todo.assignee_id && assigneeFilters.includes(todo.assignee_id))
+    return matchesQuery && matchesAssignee
+  }), [assigneeFilters, todos, query])
   const memberCandidates = useMemo(() => {
     const memberIds = new Set(members.map((member) => member.user_id))
     return users.filter((user) => user.id !== project.owner_id && !memberIds.has(user.id))
@@ -224,6 +240,19 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     setIsMemberDialogOpen(true)
   }
   const toggleMember = (memberId: string) => setSelectedMemberIds((ids) => ids.includes(memberId) ? ids.filter((id) => id !== memberId) : [...ids, memberId])
+  const toggleAssigneeFilter = (filter: string) => {
+    if (filter === 'all') {
+      setAssigneeFilters((current) => current.includes('all') ? [] : ['all'])
+      return
+    }
+    setAssigneeFilters((current) => {
+      const allFilters = ['unassigned', ...members.map((member) => member.user_id)]
+      if (current.includes('all')) return allFilters.filter((item) => item !== filter)
+      const selected = current.filter((item) => item !== 'all')
+      const next = selected.includes(filter) ? selected.filter((item) => item !== filter) : [...selected, filter]
+      return allFilters.length > 0 && allFilters.every((item) => next.includes(item)) ? ['all'] : next
+    })
+  }
   const addMembers = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!selectedMemberIds.length || isAddingMembers) return
@@ -294,7 +323,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       <nav className="project-view-tabs" aria-label="プロジェクト表示"><button className={activeView === 'topics' ? 'active' : ''} onClick={() => setActiveView('topics')}>トピック</button><button className={activeView === 'board' ? 'active' : ''} onClick={() => setActiveView('board')}>ボード</button></nav>
       {activeView === 'board' && <div className="board-toolbar">
         <div className="search-box"><SearchIcon/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ボードを検索" /></div>
-        <div className="board-label"><span className="board-dot"/> ボード</div>{notice && <span className="offline-notice">{notice}</span>}
+        <div className="assignee-filter" ref={assigneeFilterRef}><button type="button" aria-haspopup="true" aria-expanded={isAssigneeFilterOpen} onClick={() => setIsAssigneeFilterOpen((open) => !open)}><span>担当者</span><strong>{assigneeFilters.includes('all') ? 'すべての担当者' : `${assigneeFilters.length}件選択`}</strong><i aria-hidden="true">⌄</i></button>{isAssigneeFilterOpen && <div className="assignee-filter-menu" role="group" aria-label="担当者で絞り込む"><label><input type="checkbox" checked={assigneeFilters.includes('all')} onChange={() => toggleAssigneeFilter('all')}/>すべての担当者</label><label><input type="checkbox" checked={assigneeFilters.includes('all') || assigneeFilters.includes('unassigned')} onChange={() => toggleAssigneeFilter('unassigned')}/>未アサイン</label>{members.map((member) => <label key={member.user_id}><input type="checkbox" checked={assigneeFilters.includes('all') || assigneeFilters.includes(member.user_id)} onChange={() => toggleAssigneeFilter(member.user_id)}/><span className="filter-member-avatar" aria-hidden="true" style={{ backgroundColor: member.avatar_color || '#4a9c9b' }}>{Array.from(member.nickname)[0]?.toUpperCase() || '?'}</span>{member.nickname}</label>)}</div>}</div>{notice && <span className="offline-notice">{notice}</span>}
       </div>}
       {loading ? <div className="board-loading"><span/><p>プロジェクトを読み込んでいます…</p></div> : activeView === 'board' ? (
         <div className="kanban-board">
