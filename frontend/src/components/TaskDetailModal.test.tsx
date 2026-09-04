@@ -67,6 +67,9 @@ describe('TaskDetailModal', () => {
     mockedApi.updateTodo.mockResolvedValue({ ...todo, topic_id: topic.id })
     render(<TaskDetailModal todo={todo} topics={[topic]} userId="user-1" nickname="山田" onClose={vi.fn()} onUpdated={onUpdated} />)
 
+    const topicSection = screen.getByRole('combobox', { name: 'トピック' }).closest('.task-detail-section') as HTMLElement
+    const descriptionSection = screen.getByRole('textbox', { name: '説明' }).closest('.task-detail-section') as HTMLElement
+    expect(topicSection.compareDocumentPosition(descriptionSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await user.selectOptions(screen.getByRole('combobox', { name: 'トピック' }), topic.id)
     await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith(todo.id, { topic_id: topic.id }))
     expect(onUpdated).toHaveBeenCalledWith(expect.objectContaining({ topic_id: topic.id }))
