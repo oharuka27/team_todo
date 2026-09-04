@@ -55,6 +55,7 @@ export interface ProjectMember {
   user_id: string;
   role: 'owner' | 'member';
   nickname: string;
+  avatar_color?: string;
   created_at?: string;
   notified_at?: string | null;
 }

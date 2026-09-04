@@ -65,7 +65,10 @@ class MemoryD1 {
   all(sql: string, params: unknown[]) {
     if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
     if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
-    if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => ({ ...member, nickname: this.users.find((user) => user.id === member.user_id)?.nickname }))
+    if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => {
+      const user = this.users.find((candidate) => candidate.id === member.user_id)
+      return { ...member, nickname: user?.nickname, avatar_color: user?.avatar_color }
+    })
     if (sql.includes("SELECT user_id FROM project_members") && sql.includes("role = 'member'")) return this.members.filter((member) => member.project_id === params[0] && member.role === 'member').map((member) => ({ user_id: member.user_id }))
     if (sql.includes('SELECT project_id FROM project_members')) return this.members.filter((member) => member.user_id === params[0]).map((member) => ({ project_id: member.project_id }))
     if (sql.includes('FROM projects WHERE owner_id')) return this.projects.filter((project) => project.owner_id === params[0])
@@ -368,13 +371,18 @@ describe('Team Todo API', () => {
   })
 
   it('オーナーがメンバーを追加し、対象ユーザーが通知を確認できる', async () => {
-    database.users.push({ id: 'owner-1', nickname: '山田' }, { id: 'member-1', nickname: '佐藤' })
+    database.users.push({ id: 'owner-1', nickname: '山田', avatar_color: '#336699' }, { id: 'member-1', nickname: '佐藤', avatar_color: '#993366' })
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '共同プロジェクト', user_id: 'owner-1' }), environment)
     const project = await createResponse.json() as { id: string }
 
     const addResponse = await app.request(`/api/projects/${project.id}/members`, jsonRequest({ owner_id: 'owner-1', user_id: 'member-1' }), environment)
     expect(addResponse.status).toBe(201)
-    expect(await addResponse.json()).toMatchObject({ user_id: 'member-1', nickname: '佐藤', role: 'member' })
+    expect(await addResponse.json()).toMatchObject({ user_id: 'member-1', nickname: '佐藤', role: 'member', avatar_color: '#993366' })
+    const membersResponse = await app.request(`/api/projects/${project.id}/members`, undefined, environment)
+    expect(await membersResponse.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ user_id: 'owner-1', nickname: '山田', avatar_color: '#336699' }),
+      expect.objectContaining({ user_id: 'member-1', nickname: '佐藤', avatar_color: '#993366' }),
+    ]))
     expect(realtime.messages).toEqual(expect.arrayContaining([
       { channel: 'user:member-1', event: { type: 'membership.added', project_id: project.id, user_id: 'member-1' } },
       { channel: `project:${project.id}`, event: { type: 'member.added', project_id: project.id, user_id: 'member-1' } },

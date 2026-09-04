@@ -18,6 +18,8 @@ vi.mock('../services/api', () => ({
     updateColumn: vi.fn(),
     updateProject: vi.fn(),
     getUsers: vi.fn(),
+    getProjectMembers: vi.fn(),
+    addProjectMember: vi.fn(),
     getTodoComments: vi.fn(),
     createTodoComment: vi.fn(),
   },
@@ -50,7 +52,29 @@ describe('ProjectPage', () => {
     mockedApi.getColumns.mockResolvedValue(columns)
     mockedApi.getTopics.mockResolvedValue([])
     mockedApi.getUsers.mockResolvedValue([])
+    mockedApi.getProjectMembers.mockResolvedValue([])
     mockedApi.getTodoComments.mockResolvedValue([])
+  })
+
+  it('実際のプロジェクトメンバーを表示し、追加ボタンから新しいメンバーを追加する', async () => {
+    const user = userEvent.setup()
+    mockedApi.getTodos.mockResolvedValue([])
+    mockedApi.getUsers.mockResolvedValue([
+      { id: 'user-1', nickname: '山田', avatar_color: '#336699', created_at: now, updated_at: now },
+      { id: 'user-2', nickname: '佐藤', avatar_color: '#993366', created_at: now, updated_at: now },
+    ])
+    mockedApi.getProjectMembers.mockResolvedValue([{ project_id: project.id, user_id: 'user-1', role: 'owner', nickname: '山田', avatar_color: '#336699' }])
+    mockedApi.addProjectMember.mockResolvedValue({ project_id: project.id, user_id: 'user-2', role: 'member', nickname: '佐藤' })
+
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    expect(await screen.findByTitle('山田（オーナー）')).toHaveTextContent('山')
+    await user.click(screen.getByRole('button', { name: 'メンバーを追加' }))
+    await user.click(screen.getByRole('checkbox', { name: /佐藤/ }))
+    await user.click(screen.getByRole('button', { name: '追加' }))
+
+    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith(project.id, 'user-1', 'user-2'))
+    expect(await screen.findByTitle('佐藤（メンバー）')).toHaveTextContent('佐')
   })
 
   it('タスクを追加し、削除する', async () => {
@@ -173,6 +197,25 @@ describe('ProjectPage', () => {
     expect(await screen.findByTitle('担当: 佐藤')).toHaveTextContent('佐')
     expect(screen.getByTitle('担当: 未アサイン')).toHaveTextContent('未')
     expect(screen.getByTitle('担当: 未アサイン')).toHaveClass('unassigned')
+  })
+
+  it('タスクカードに所属トピックと無所属を表示する', async () => {
+    const topic = { id: 'topic-1', project_id: project.id, name: 'フロントエンド', color: '#336699', created_at: now, updated_at: now }
+    mockedApi.getTopics.mockResolvedValue([topic])
+    mockedApi.getTodos.mockResolvedValue([
+      { ...todo('todo-1', 'トピックあり'), topic_id: topic.id },
+      { ...todo('todo-2', 'トピックなし'), topic_id: null },
+    ])
+
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+
+    const assignedCard = (await screen.findByText('トピックあり')).closest('.todo-card') as HTMLElement
+    const unassignedCard = screen.getByText('トピックなし').closest('.todo-card') as HTMLElement
+    const topicLabel = within(assignedCard).getByTitle('トピック: フロントエンド')
+    expect(topicLabel).toHaveTextContent('フロントエンド')
+    expect(topicLabel.previousElementSibling).toHaveClass('task-id')
+    expect(topicLabel.nextElementSibling).toHaveClass('mini-avatar')
+    expect(within(unassignedCard).getByTitle('トピック: 無所属')).toHaveTextContent('無所属')
   })
 
   it('検索文字に一致するタスクだけを表示する', async () => {

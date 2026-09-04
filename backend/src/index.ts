@@ -224,7 +224,7 @@ app.delete('/api/projects/:id', async (c) => {
 });
 
 app.get('/api/projects/:id/members', async (c) => {
-  const { results } = await c.env.DB.prepare(`SELECT pm.project_id, pm.user_id, pm.role, pm.created_at, pm.notified_at, u.nickname FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY pm.role DESC, u.nickname COLLATE NOCASE ASC`).bind(c.req.param('id')).all<ProjectMember & { nickname: string }>();
+  const { results } = await c.env.DB.prepare(`SELECT pm.project_id, pm.user_id, pm.role, pm.created_at, pm.notified_at, u.nickname, u.avatar_color FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY pm.role DESC, u.nickname COLLATE NOCASE ASC`).bind(c.req.param('id')).all<ProjectMember & { nickname: string; avatar_color?: string }>();
   return c.json(results);
 });
 
@@ -246,7 +246,7 @@ app.post('/api/projects/:id/members', async (c) => {
       broadcast(c.env, `project:${projectId}`, { type: 'member.added', project_id: projectId, user_id: body.user_id }),
     ]);
   }
-  return c.json({ project_id: projectId, user_id: user.id, role: 'member', nickname: user.nickname }, existing ? 200 : 201);
+  return c.json({ project_id: projectId, user_id: user.id, role: 'member', nickname: user.nickname, avatar_color: user.avatar_color }, existing ? 200 : 201);
 });
 
 app.delete('/api/projects/:id/members/:userId', async (c) => {
