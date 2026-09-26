@@ -38,6 +38,7 @@ Thumbs.db
 
 # CloudFlare Workers
 .wrangler/
+.dev.vars
 wrangler-log.txt
 
 # Logs

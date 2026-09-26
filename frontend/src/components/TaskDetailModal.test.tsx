@@ -57,7 +57,7 @@ describe('TaskDetailModal', () => {
     await user.type(screen.getByRole('textbox', { name: 'コメント' }), '確認しました')
     await user.click(screen.getByRole('button', { name: '追加' }))
     expect(await screen.findByText('確認しました')).toBeInTheDocument()
-    expect(mockedApi.createTodoComment).toHaveBeenCalledWith(todo.id, 'user-1', '確認しました')
+    expect(mockedApi.createTodoComment).toHaveBeenCalledWith(todo.id, '確認しました')
   })
 
   it('タスクの所属トピックを変更する', async () => {

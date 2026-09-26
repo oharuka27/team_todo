@@ -100,16 +100,18 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
         try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
       }
     }
-    const connect = () => {
+    const connect = async () => {
       if (!active) return
       try {
-        socket = apiClient.connectProjectEvents(project.id, userId)
+        const nextSocket = await apiClient.connectProjectEvents(project.id)
+        if (!active) { nextSocket.close(); return }
+        socket = nextSocket
         socket.onmessage = reload
         socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
         socket.onerror = () => socket?.close()
-      } catch { retryId = window.setTimeout(connect, 5_000) }
+      } catch { if (active) retryId = window.setTimeout(connect, 5_000) }
     }
-    connect()
+    void connect()
     return () => {
       active = false
       if (retryId !== null) window.clearTimeout(retryId)
@@ -160,7 +162,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     setAddingTo(null)
 
     try {
-      const created = await apiClient.createTodo(project.id, title, columnTitle, userId)
+      const created = await apiClient.createTodo(project.id, title, columnTitle)
       setTodos((items) => items.map((todo) => todo.id === temporaryId ? created : todo))
     } catch {
       setTodos((items) => items.map((todo) => todo.id === temporaryId ? { ...todo, id: crypto.randomUUID() } : todo))
@@ -213,7 +215,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const createTopicTask = async (topicId: string | null) => {
     const title = newTopicTaskTitle.trim(); if (!title) return
     try {
-      const created = await apiClient.createTodo(project.id, title, 'To Do', userId, undefined, topicId)
+      const created = await apiClient.createTodo(project.id, title, 'To Do', undefined, topicId)
       setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
     } catch { setNotice('タスクを作成できませんでした') }
   }
@@ -259,7 +261,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     setIsAddingMembers(true)
     setMemberError(null)
     try {
-      const added = await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(project.id, userId, memberId)))
+      const added = await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(project.id, memberId)))
       const userById = new Map(users.map((user) => [user.id, user]))
       setMembers((current) => [...current, ...added.map((member) => ({ ...member, avatar_color: userById.get(member.user_id)?.avatar_color }))])
       setIsMemberDialogOpen(false)
@@ -294,7 +296,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     setIsSavingProjectName(true)
     setNotice(null)
     try {
-      const updated = await apiClient.updateProject(project.id, { name }, userId)
+      const updated = await apiClient.updateProject(project.id, { name })
       onProjectUpdated(updated)
       setProjectName(updated.name)
       setIsEditingProjectName(false)

@@ -4,8 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { apiClient, type Project, type UserAccount } from './services/api'
 
+const clerk = vi.hoisted(() => ({ signOut: vi.fn() }))
+vi.mock('@clerk/react', () => ({
+  SignIn: () => <div>サインイン</div>,
+  useAuth: () => ({ isLoaded: true, isSignedIn: true, userId: 'user-test', getToken: async () => 'session-token' }),
+  useClerk: () => ({ signOut: clerk.signOut }),
+}))
+
 vi.mock('./services/api', () => ({
   apiClient: {
+    setTokenProvider: vi.fn(),
+    getCurrentUser: vi.fn(),
     registerUser: vi.fn(),
     updateUser: vi.fn(),
     connectUserEvents: vi.fn(),
@@ -50,6 +59,7 @@ const websocketStub = () => ({
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockedApi.getCurrentUser.mockResolvedValue({ id: 'user-test', nickname: '山田', created_at: now, updated_at: now })
     mockedApi.getProjects.mockResolvedValue([])
     mockedApi.getTodos.mockResolvedValue([])
     mockedApi.getColumns.mockResolvedValue([])
@@ -59,13 +69,12 @@ describe('App', () => {
     mockedApi.getProjectMembers.mockResolvedValue([])
     mockedApi.updateProjectOrder.mockResolvedValue({ success: true })
     userSocket = websocketStub()
-    mockedApi.connectUserEvents.mockReturnValue(userSocket)
-    mockedApi.connectProjectEvents.mockImplementation(() => websocketStub())
+    mockedApi.connectUserEvents.mockResolvedValue(userSocket)
+    mockedApi.connectProjectEvents.mockImplementation(async () => websocketStub())
   })
 
   it('オーナー／メンバープロジェクトを分類し、オーナーがメンバーを追加する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([project('owner-project', '所有プロジェクト'), { ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
     mockedApi.getUsers.mockResolvedValue([{ id: 'member-1', nickname: '佐藤', created_at: now, updated_at: now }])
     mockedApi.getProjectMembers.mockResolvedValue([])
@@ -74,16 +83,15 @@ describe('App', () => {
 
     expect(await screen.findByText('オーナープロジェクト')).toBeInTheDocument()
     expect(screen.getByText('メンバープロジェクト')).toBeInTheDocument()
-    fireEvent.contextMenu(screen.getByRole('button', { name: '所有プロジェクト' }))
+    fireEvent.contextMenu(await screen.findByRole('button', { name: '所有プロジェクト' }))
     await user.click(screen.getByRole('menuitem', { name: /メンバー追加/ }))
     await user.click(await screen.findByRole('checkbox', { name: /佐藤/ }))
     await user.click(screen.getByRole('button', { name: '実行' }))
 
-    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith('owner-project', 'user-test', 'member-1'))
+    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith('owner-project', 'member-1'))
   })
 
   it('ドラッグ位置を表示し、オーナープロジェクトの表示順を変更する', async () => {
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([project('owner-1', '第一プロジェクト'), project('owner-2', '第二プロジェクト')])
     const { container } = render(<App />)
     const second = await screen.findByRole('button', { name: '第二プロジェクト' })
@@ -102,7 +110,6 @@ describe('App', () => {
 
   it('招待通知を確認してからメンバープロジェクトを表示する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
     mockedApi.getProjectNotifications.mockResolvedValue([{ project_id: 'member-project', project_name: '参加プロジェクト' }])
     mockedApi.acknowledgeProjectNotifications.mockResolvedValue({ success: true })
@@ -115,7 +122,6 @@ describe('App', () => {
   })
 
   it('画面に戻ったとき追加されたプロジェクトを自動取得して通知する', async () => {
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     render(<App />)
     await screen.findByText('オーナープロジェクト')
 
@@ -128,7 +134,6 @@ describe('App', () => {
   })
 
   it('WebSocketで招待イベントを受信するとポップアップを自動表示する', async () => {
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     render(<App />)
     await screen.findByText('オーナープロジェクト')
 
@@ -141,7 +146,6 @@ describe('App', () => {
 
   it('オーナーによる削除をWebSocketで受信し、OKまで操作を遮る通知を表示する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '削除対象'), owner_id: 'owner-1' }])
     render(<App />)
     await screen.findByRole('button', { name: '削除対象' })
@@ -157,7 +161,6 @@ describe('App', () => {
 
   it('メンバープロジェクトから確認入力後に脱退する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([{ ...project('member-project', '参加プロジェクト'), owner_id: 'other-user' }])
     mockedApi.leaveProject.mockResolvedValue({ success: true })
     render(<App />)
@@ -168,13 +171,12 @@ describe('App', () => {
     await user.type(screen.getByRole('textbox', { name: /確認のため「脱退」/ }), '脱退')
     await user.click(screen.getByRole('button', { name: '実行' }))
 
-    await waitFor(() => expect(mockedApi.leaveProject).toHaveBeenCalledWith('member-project', 'user-test'))
+    await waitFor(() => expect(mockedApi.leaveProject).toHaveBeenCalledWith('member-project'))
     expect(screen.queryByRole('button', { name: '参加プロジェクト' })).not.toBeInTheDocument()
   })
 
   it('オーナーが確認入力後に選択したメンバーを削除する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([project('owner-project', '所有プロジェクト')])
     mockedApi.getUsers.mockResolvedValue([{ id: 'member-1', nickname: '佐藤', created_at: now, updated_at: now }])
     mockedApi.getProjectMembers.mockResolvedValue([{ project_id: 'owner-project', user_id: 'member-1', role: 'member', nickname: '佐藤' }])
@@ -189,27 +191,26 @@ describe('App', () => {
     await user.type(screen.getByRole('textbox', { name: '確認入力' }), '削除')
     await user.click(executeButton)
 
-    await waitFor(() => expect(mockedApi.removeProjectMember).toHaveBeenCalledWith('owner-project', 'user-test', 'member-1'))
+    await waitFor(() => expect(mockedApi.removeProjectMember).toHaveBeenCalledWith('owner-project', 'member-1'))
   })
 
   it('登録したニックネームと先頭文字を表示する', async () => {
     const user = userEvent.setup()
     const account: UserAccount = { id: 'user-test', nickname: 'Haruka', created_at: now, updated_at: now }
+    mockedApi.getCurrentUser.mockResolvedValue(null)
     mockedApi.registerUser.mockResolvedValue(account)
 
     render(<App />)
-    await user.type(screen.getByRole('textbox', { name: 'ニックネーム' }), 'Haruka')
+    await user.type(await screen.findByRole('textbox', { name: 'ニックネーム' }), 'Haruka')
     await user.click(screen.getByRole('button', { name: '登録する' }))
 
     expect(await screen.findByText('Haruka')).toBeInTheDocument()
     expect(screen.getByText('H')).toHaveClass('avatar')
-    expect(localStorage.getItem('nickname')).toBe('Haruka')
-    expect(mockedApi.registerUser).toHaveBeenCalledWith(expect.stringMatching(/^user_/), 'Haruka')
+    expect(mockedApi.registerUser).toHaveBeenCalledWith('Haruka')
   })
 
   it('左下の設定メニューからユーザー名とアイコン背景色を変更する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test'); localStorage.setItem('nickname', '山田')
     mockedApi.updateUser.mockResolvedValue({ id: 'user-test', nickname: '佐藤', avatar_color: '#336699', created_at: now, updated_at: now })
     render(<App />)
 
@@ -223,13 +224,29 @@ describe('App', () => {
 
     await waitFor(() => expect(mockedApi.updateUser).toHaveBeenCalledWith('user-test', '佐藤', '#336699'))
     expect(screen.getByText('佐藤')).toBeInTheDocument()
-    expect(localStorage.getItem('avatarColor')).toBe('#336699')
+  })
+
+  it('登録済みのアカウントを読み込み、Clerkのユーザーとしてリアルタイム接続する', async () => {
+    render(<App />)
+
+    expect(await screen.findByText('山田')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'アカウント登録' })).not.toBeInTheDocument()
+    expect(mockedApi.setTokenProvider).toHaveBeenCalled()
+    await waitFor(() => expect(mockedApi.connectUserEvents).toHaveBeenCalledWith('user-test'))
+  })
+
+  it('ユーザーメニューからログアウトする', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'ユーザーメニュー' }))
+    await user.click(screen.getByRole('menuitem', { name: /ログアウト/ }))
+
+    expect(clerk.signOut).toHaveBeenCalled()
   })
 
   it('プロジェクトを追加し、確認入力後に削除する', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('userId', 'user-test')
-    localStorage.setItem('nickname', '山田')
     mockedApi.getProjects.mockResolvedValue([project('project-1', '既存プロジェクト')])
     mockedApi.createProject.mockResolvedValue(project('project-2', '新規プロジェクト'))
     mockedApi.deleteProject.mockResolvedValue({ success: true })
@@ -241,7 +258,7 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '決定' }))
 
     const newProjectButton = await screen.findByRole('button', { name: '新規プロジェクト' })
-    expect(mockedApi.createProject).toHaveBeenCalledWith('新規プロジェクト', undefined, 'user-test')
+    expect(mockedApi.createProject).toHaveBeenCalledWith('新規プロジェクト', undefined)
 
     fireEvent.contextMenu(newProjectButton, { clientX: 100, clientY: 100 })
     await user.click(screen.getByRole('menuitem', { name: 'プロジェクト削除' }))
@@ -250,7 +267,7 @@ describe('App', () => {
     await user.type(screen.getByRole('textbox', { name: /確認のため/ }), '削除')
     await user.click(executeButton)
 
-    await waitFor(() => expect(mockedApi.deleteProject).toHaveBeenCalledWith('project-2', 'user-test'))
+    await waitFor(() => expect(mockedApi.deleteProject).toHaveBeenCalledWith('project-2'))
     expect(screen.queryByRole('button', { name: '新規プロジェクト' })).not.toBeInTheDocument()
   })
 })

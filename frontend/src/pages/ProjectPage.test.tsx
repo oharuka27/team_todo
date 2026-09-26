@@ -73,7 +73,7 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('checkbox', { name: /佐藤/ }))
     await user.click(screen.getByRole('button', { name: '追加' }))
 
-    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith(project.id, 'user-1', 'user-2'))
+    await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith(project.id, 'user-2'))
     expect(await screen.findByTitle('佐藤（メンバー）')).toHaveTextContent('佐')
   })
 
@@ -94,7 +94,7 @@ describe('ProjectPage', () => {
 
     expect(await screen.findByText('追加タスク')).toBeInTheDocument()
     expect(screen.getAllByTitle('担当: 山田')).toHaveLength(2)
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '追加タスク', 'To Do', 'user-1')
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '追加タスク', 'To Do')
 
     await user.click(screen.getByRole('button', { name: '追加タスクを削除' }))
     await waitFor(() => expect(mockedApi.deleteTodo).toHaveBeenCalledWith('todo-2'))
@@ -118,7 +118,7 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('button', { name: '追加' }))
 
     expect(mockedApi.createTopic).toHaveBeenCalledWith(project.id, 'フロントエンド', expect.stringMatching(/^#[0-9a-fA-F]{6}$/))
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', 'user-1', undefined, topic.id)
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', undefined, topic.id)
     await user.click(await screen.findByRole('button', { name: /画面を作る/ }))
     expect(screen.getByRole('dialog', { name: '画面を作る' })).toBeInTheDocument()
   })
@@ -137,7 +137,7 @@ describe('ProjectPage', () => {
     await user.click(within(unassignedCard).getByRole('button', { name: /タスクを追加/ }))
     await user.type(within(unassignedCard).getByRole('textbox', { name: '無所属のタスク名' }), '無所属タスク')
     await user.click(within(unassignedCard).getByRole('button', { name: '追加' }))
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'To Do', 'user-1', undefined, null)
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'To Do', undefined, null)
 
     const taskButton = await within(unassignedCard).findByRole('button', { name: /無所属タスク/ })
     const targetCard = screen.getByRole('heading', { name: '移動先' }).closest('.topic-card') as HTMLElement
@@ -347,7 +347,7 @@ describe('ProjectPage', () => {
     await user.type(input, '変更後プロジェクト')
     await user.click(screen.getByRole('button', { name: 'プロジェクト名を保存' }))
 
-    await waitFor(() => expect(mockedApi.updateProject).toHaveBeenCalledWith(project.id, { name: '変更後プロジェクト' }, 'user-1'))
+    await waitFor(() => expect(mockedApi.updateProject).toHaveBeenCalledWith(project.id, { name: '変更後プロジェクト' }))
     expect(onProjectUpdated).toHaveBeenCalledWith(updatedProject)
     expect(screen.getByRole('heading', { name: '変更後プロジェクト' })).toBeInTheDocument()
   })

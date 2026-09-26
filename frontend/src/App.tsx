@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { SignIn, useAuth, useClerk } from '@clerk/react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import './App.css'
 import ProjectPage from './pages/ProjectPage'
 import { apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
@@ -8,9 +9,20 @@ const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: numbe
 )
 
 function App() {
-  const [userId] = useState(() => localStorage.getItem('userId') || `user_${Math.random().toString(36).slice(2, 9)}`)
-  const [nickname, setNickname] = useState(() => localStorage.getItem('nickname') || '')
-  const [avatarColor, setAvatarColor] = useState(() => localStorage.getItem('avatarColor') || '#4a9c9b')
+  const { isLoaded, isSignedIn, userId, getToken } = useAuth()
+  // Layout effects run before the workspace's data-fetching effects, so every request carries the session token.
+  useLayoutEffect(() => { apiClient.setTokenProvider(() => getToken()) }, [getToken])
+
+  if (!isLoaded) return <div className="auth-screen"><div className="board-loading"><span/><p>読み込んでいます…</p></div></div>
+  if (!isSignedIn || !userId) return <div className="auth-screen"><SignIn /></div>
+  return <Workspace key={userId} userId={userId} />
+}
+
+function Workspace({ userId }: { userId: string }) {
+  const { signOut } = useClerk()
+  const [isAccountLoaded, setIsAccountLoaded] = useState(false)
+  const [nickname, setNickname] = useState('')
+  const [avatarColor, setAvatarColor] = useState('#4a9c9b')
   const [nicknameInput, setNicknameInput] = useState('')
   const [isRegistering, setIsRegistering] = useState(false)
   const [registrationError, setRegistrationError] = useState<string | null>(null)
@@ -46,14 +58,26 @@ function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null)
 
   useEffect(() => {
-    localStorage.setItem('userId', userId)
+    let active = true
+    apiClient.getCurrentUser()
+      .then((account) => {
+        if (!active || !account) return
+        setNickname(account.nickname)
+        setAvatarColor(account.avatar_color || '#4a9c9b')
+      })
+      .catch(() => { if (active) setRegistrationError('アカウント情報を取得できませんでした。バックエンドへの接続を確認してください。') })
+      .finally(() => { if (active) setIsAccountLoaded(true) })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
     if (!nickname) return
     let active = true
     setNotificationsChecked(false)
 
     const refreshWorkspace = async (initial = false) => {
       const [projectsResult, notificationsResult] = await Promise.allSettled([
-        apiClient.getProjects(userId),
+        apiClient.getProjects(),
         apiClient.getProjectNotifications(userId),
       ])
       if (!active) return
@@ -86,10 +110,12 @@ function App() {
     let active = true
     let socket: WebSocket | null = null
     let retryId: number | null = null
-    const connect = () => {
+    const connect = async () => {
       if (!active) return
       try {
-        socket = apiClient.connectUserEvents(userId)
+        const nextSocket = await apiClient.connectUserEvents(userId)
+        if (!active) { nextSocket.close(); return }
+        socket = nextSocket
         socket.onmessage = (event) => {
           try {
             const message = JSON.parse(String(event.data)) as { type?: string; project_id?: string; project_name?: string }
@@ -101,9 +127,9 @@ function App() {
         }
         socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
         socket.onerror = () => socket?.close()
-      } catch { retryId = window.setTimeout(connect, 5_000) }
+      } catch { if (active) retryId = window.setTimeout(connect, 5_000) }
     }
-    connect()
+    void connect()
     return () => {
       active = false
       if (retryId !== null) window.clearTimeout(retryId)
@@ -132,7 +158,7 @@ function App() {
     if (!newProjectName.trim()) return
     setIsCreating(true)
     try {
-      const created = await apiClient.createProject(newProjectName.trim(), undefined, userId)
+      const created = await apiClient.createProject(newProjectName.trim(), undefined)
       setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
     } catch {
       const now = new Date().toISOString()
@@ -150,9 +176,7 @@ function App() {
     setIsRegistering(true)
     setRegistrationError(null)
     try {
-      const account = await apiClient.registerUser(userId, value)
-      localStorage.setItem('nickname', account.nickname)
-      localStorage.setItem('avatarColor', account.avatar_color || '#4a9c9b')
+      const account = await apiClient.registerUser(value)
       setNickname(account.nickname)
       setAvatarColor(account.avatar_color || '#4a9c9b')
       setNicknameInput('')
@@ -186,7 +210,6 @@ function App() {
     try {
       const updated = await apiClient.updateUser(userId, settingsNickname.trim(), settingsColor)
       setNickname(updated.nickname); setAvatarColor(updated.avatar_color || settingsColor)
-      localStorage.setItem('nickname', updated.nickname); localStorage.setItem('avatarColor', updated.avatar_color || settingsColor)
       setIsSettingsOpen(false)
     } catch { setSettingsError('ユーザー設定を保存できませんでした。') }
     finally { setIsSavingSettings(false) }
@@ -212,7 +235,7 @@ function App() {
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await apiClient.deleteProject(projectToDelete.id, userId)
+      await apiClient.deleteProject(projectToDelete.id)
       const deletedIndex = projects.findIndex((project) => project.id === projectToDelete.id)
       const remainingProjects = projects.filter((project) => project.id !== projectToDelete.id)
       setProjects(remainingProjects)
@@ -255,8 +278,8 @@ function App() {
     if (!memberDialog || !selectedMemberIds.length || isUpdatingMembers || (memberDialog.mode === 'remove' && memberConfirmation !== '削除')) return
     setIsUpdatingMembers(true); setMemberError(null)
     try {
-      if (memberDialog.mode === 'add') await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(memberDialog.project.id, userId, memberId)))
-      else await Promise.all(selectedMemberIds.map((memberId) => apiClient.removeProjectMember(memberDialog.project.id, userId, memberId)))
+      if (memberDialog.mode === 'add') await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(memberDialog.project.id, memberId)))
+      else await Promise.all(selectedMemberIds.map((memberId) => apiClient.removeProjectMember(memberDialog.project.id, memberId)))
       setMemberDialog(null)
     } catch {
       setMemberError(`メンバーを${memberDialog.mode === 'add' ? '追加' : '削除'}できませんでした。`)
@@ -268,7 +291,7 @@ function App() {
     if (!projectToLeave || leaveConfirmation !== '脱退' || isDeleting) return
     setIsDeleting(true); setDeleteError(null)
     try {
-      await apiClient.leaveProject(projectToLeave.id, userId)
+      await apiClient.leaveProject(projectToLeave.id)
       const remaining = projects.filter((project) => project.id !== projectToLeave.id)
       setProjects(remaining)
       if (selectedProjectId === projectToLeave.id) setSelectedProjectId(remaining[0]?.id ?? null)
@@ -320,16 +343,16 @@ function App() {
           </nav>
           <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>
-        {nickname && <div className="sidebar-footer"><button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">{nicknameInitial}</button><div><strong>{nickname}</strong><small>オンライン</small></div>{isUserMenuOpen && <div className="user-settings-menu" role="menu"><button role="menuitem" onClick={openUserSettings}>⚙ 設定</button></div>}</div>}
+        {nickname && <div className="sidebar-footer"><button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">{nicknameInitial}</button><div><strong>{nickname}</strong><small>オンライン</small></div>{isUserMenuOpen && <div className="user-settings-menu" role="menu"><button role="menuitem" onClick={openUserSettings}>⚙ 設定</button><button role="menuitem" onClick={() => void signOut()}>↪ ログアウト</button></div>}</div>}
       </aside>
 
       <main className="main-area">
-        {!notificationsChecked && nickname ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} /> : (
+        {!isAccountLoaded || (!notificationsChecked && nickname) ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} /> : (
           <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
         )}
       </main>
 
-      {!nickname && (
+      {isAccountLoaded && !nickname && (
         <div className="modal-backdrop account-backdrop">
           <div className="modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-registration-title">
             <div className="account-symbol"><Icon size={28}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></Icon></div>

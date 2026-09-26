@@ -71,25 +71,45 @@ export interface BoardColumn {
   position: number;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+type TokenProvider = () => Promise<string | null>;
+
 class ApiClient {
   private baseUrl: string;
+  private getToken: TokenProvider = async () => null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
   }
 
-  private websocketUrl(path: string): string {
+  // Clerk session tokens are short-lived, so a fresh one is requested for every call.
+  setTokenProvider(provider: TokenProvider) {
+    this.getToken = provider;
+  }
+
+  private async websocketUrl(path: string): Promise<string> {
     const url = new URL(`${this.baseUrl}${path}`);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    // Browsers cannot send an Authorization header with a WebSocket handshake.
+    const token = await this.getToken();
+    if (token) url.searchParams.set('token', token);
     return url.toString();
   }
 
-  connectUserEvents(userId: string): WebSocket {
-    return new WebSocket(this.websocketUrl(`/api/realtime/users/${encodeURIComponent(userId)}?user_id=${encodeURIComponent(userId)}`));
+  async connectUserEvents(userId: string): Promise<WebSocket> {
+    return new WebSocket(await this.websocketUrl(`/api/realtime/users/${encodeURIComponent(userId)}`));
   }
 
-  connectProjectEvents(projectId: string, userId: string): WebSocket {
-    return new WebSocket(this.websocketUrl(`/api/realtime/projects/${encodeURIComponent(projectId)}?user_id=${encodeURIComponent(userId)}`));
+  async connectProjectEvents(projectId: string): Promise<WebSocket> {
+    return new WebSocket(await this.websocketUrl(`/api/realtime/projects/${encodeURIComponent(projectId)}`));
   }
 
   private async request<T>(
@@ -98,10 +118,12 @@ class ApiClient {
     body?: unknown
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const token = await this.getToken();
     const options: RequestInit = {
       method,
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     };
 
@@ -112,7 +134,7 @@ class ApiClient {
     try {
       const response = await fetch(url, options);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        throw new ApiError(response.status, `HTTP ${response.status}: ${response.statusText}`);
       }
       return await response.json();
     } catch (error) {
@@ -121,8 +143,18 @@ class ApiClient {
     }
   }
 
-  async registerUser(id: string, nickname: string): Promise<UserAccount> {
-    return this.request('POST', '/api/users', { id, nickname });
+  async registerUser(nickname: string): Promise<UserAccount> {
+    return this.request('POST', '/api/users', { nickname });
+  }
+
+  // Returns null when the signed-in Clerk user has not registered a nickname yet.
+  async getCurrentUser(): Promise<UserAccount | null> {
+    try {
+      return await this.request<UserAccount>('GET', '/api/users/me');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async getUsers(): Promise<UserAccount[]> {
@@ -130,7 +162,7 @@ class ApiClient {
   }
 
   async updateUser(id: string, nickname: string, avatarColor: string): Promise<UserAccount> {
-    return this.request('PUT', `/api/users/${encodeURIComponent(id)}`, { user_id: id, nickname, avatar_color: avatarColor });
+    return this.request('PUT', `/api/users/${encodeURIComponent(id)}`, { nickname, avatar_color: avatarColor });
   }
 
   async getProjectNotifications(userId: string): Promise<ProjectNotification[]> {
@@ -142,56 +174,44 @@ class ApiClient {
   }
 
   // Project APIs
-  async createProject(
-    name: string,
-    description: string | undefined,
-    userId: string
-  ): Promise<Project> {
-    return this.request('POST', '/api/projects', {
-      name,
-      description,
-      user_id: userId,
-    });
+  async createProject(name: string, description: string | undefined): Promise<Project> {
+    return this.request('POST', '/api/projects', { name, description });
   }
 
-  async getProjects(userId: string): Promise<Project[]> {
-    return this.request('GET', `/api/projects?user_id=${userId}`);
+  async getProjects(): Promise<Project[]> {
+    return this.request('GET', '/api/projects');
   }
 
   async updateProjectOrder(userId: string, group: 'owner' | 'member', projectIds: string[]): Promise<{ success: boolean }> {
-    return this.request('PUT', `/api/users/${encodeURIComponent(userId)}/project-order`, { user_id: userId, group, project_ids: projectIds });
+    return this.request('PUT', `/api/users/${encodeURIComponent(userId)}/project-order`, { group, project_ids: projectIds });
   }
 
   async getProject(projectId: string): Promise<Project> {
     return this.request('GET', `/api/projects/${projectId}`);
   }
 
-  async updateProject(
-    projectId: string,
-    updates: Partial<Project>,
-    userId: string
-  ): Promise<Project> {
-    return this.request('PUT', `/api/projects/${projectId}`, { ...updates, user_id: userId });
+  async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
+    return this.request('PUT', `/api/projects/${projectId}`, updates);
   }
 
-  async deleteProject(projectId: string, userId: string): Promise<{ success: boolean }> {
-    return this.request('DELETE', `/api/projects/${projectId}?user_id=${encodeURIComponent(userId)}`);
+  async deleteProject(projectId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/projects/${projectId}`);
   }
 
   async getProjectMembers(projectId: string): Promise<ProjectMember[]> {
     return this.request('GET', `/api/projects/${projectId}/members`);
   }
 
-  async addProjectMember(projectId: string, ownerId: string, userId: string): Promise<ProjectMember> {
-    return this.request('POST', `/api/projects/${projectId}/members`, { owner_id: ownerId, user_id: userId });
+  async addProjectMember(projectId: string, userId: string): Promise<ProjectMember> {
+    return this.request('POST', `/api/projects/${projectId}/members`, { user_id: userId });
   }
 
-  async removeProjectMember(projectId: string, ownerId: string, userId: string): Promise<{ success: boolean }> {
-    return this.request('DELETE', `/api/projects/${projectId}/members/${userId}?owner_id=${encodeURIComponent(ownerId)}`);
+  async removeProjectMember(projectId: string, userId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/projects/${projectId}/members/${userId}`);
   }
 
-  async leaveProject(projectId: string, userId: string): Promise<{ success: boolean }> {
-    return this.request('POST', `/api/projects/${projectId}/leave`, { user_id: userId });
+  async leaveProject(projectId: string): Promise<{ success: boolean }> {
+    return this.request('POST', `/api/projects/${projectId}/leave`, {});
   }
 
   // Todo APIs
@@ -199,7 +219,6 @@ class ApiClient {
     projectId: string,
     title: string,
     columnName: string,
-    userId: string,
     description?: string,
     topicId?: string | null
   ): Promise<TodoItem> {
@@ -208,7 +227,6 @@ class ApiClient {
       title,
       description,
       column_name: columnName,
-      user_id: userId,
       topic_id: topicId,
     });
   }
@@ -241,8 +259,8 @@ class ApiClient {
     return this.request('GET', `/api/todos/${todoId}/comments`);
   }
 
-  async createTodoComment(todoId: string, userId: string, body: string): Promise<TodoComment> {
-    return this.request('POST', `/api/todos/${todoId}/comments`, { user_id: userId, body });
+  async createTodoComment(todoId: string, body: string): Promise<TodoComment> {
+    return this.request('POST', `/api/todos/${todoId}/comments`, { body });
   }
 
   // Column APIs

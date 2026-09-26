@@ -53,6 +53,27 @@ team_todo/
 - Node.js 18以上
 - npm または pnpm
 
+### 認証（Clerk）
+
+ログインには [Clerk](https://clerk.com/) を使用します。Clerk ダッシュボードでアプリケーションを作成し、APIキーを設定してください。
+
+`frontend/.env.local`:
+
+```
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+```
+
+`backend/.dev.vars`（ローカル開発用。Git管理外）:
+
+```
+CLERK_SECRET_KEY=sk_test_...
+CLERK_AUTHORIZED_PARTIES=http://localhost:5173
+```
+
+本番環境では `wrangler secret put CLERK_SECRET_KEY` でシークレットを登録し、`CLERK_AUTHORIZED_PARTIES` にフロントエンドのオリジンを設定します。
+
+APIはすべて `Authorization: Bearer <Clerkセッショントークン>` を必要とし、操作ユーザーはトークンから判定します。WebSocketはヘッダーを送れないため、`?token=` クエリでトークンを渡します。
+
 ### フロントエンド
 
 ```bash
@@ -122,7 +143,8 @@ npm run dev
 ### ユーザーAPI
 
 ```
-POST   /api/users                 # ニックネームを登録
+POST   /api/users                 # ログイン中ユーザーのニックネームを登録
+GET    /api/users/me              # ログイン中ユーザーの情報取得（未登録なら404）
 GET    /api/users                 # ユーザー一覧取得
 GET    /api/users/:id/project-notifications # 未確認のプロジェクト招待通知
 POST   /api/users/:id/project-notifications/acknowledge # 招待通知を確認済みにする
@@ -241,7 +263,7 @@ npm run build
 
 - WebSocket接続によるリアルタイム同期
 - 複数ユーザーの同時編集に対応
-- 各ユーザーにはローカルストレージで自動的にIDを割り当て
+- ユーザーIDはClerkのユーザーIDを使用し、初回ログイン時にニックネームを登録
 
 ## 📦 依存パッケージ
 

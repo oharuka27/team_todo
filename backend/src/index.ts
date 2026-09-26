@@ -1,8 +1,10 @@
+import { verifyToken } from '@clerk/backend';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { v4 as uuidv4 } from 'uuid';
 
-interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace }
+interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace; CLERK_SECRET_KEY: string; CLERK_AUTHORIZED_PARTIES?: string }
+interface Variables { userId: string }
 interface Project { id: string; name: string; description: string | null; owner_id: string; created_at: string; updated_at: string }
 interface UserAccount { id: string; nickname: string; avatar_color?: string; created_at: string; updated_at: string }
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
@@ -43,14 +45,29 @@ const broadcast = async (env: Bindings, channel: string, event: RealtimeEvent) =
   await stub.fetch('https://realtime.internal/broadcast', { method: 'POST', body: JSON.stringify(event) });
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 app.use('*', cors());
 app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
+// Every API request is attributed to the user in the verified Clerk session token.
+// Browsers cannot set headers on WebSocket requests, so realtime connections pass it as ?token=.
+app.use('/api/*', async (c, next) => {
+  const token = c.req.header('Authorization')?.match(/^Bearer (.+)$/)?.[1] ?? (c.req.path.startsWith('/api/realtime/') ? c.req.query('token') : undefined);
+  if (!token) return c.json({ error: 'Unauthorized' }, 401);
+  try {
+    const authorizedParties = c.env.CLERK_AUTHORIZED_PARTIES?.split(',').map((party) => party.trim()).filter(Boolean);
+    const payload = await verifyToken(token, { secretKey: c.env.CLERK_SECRET_KEY, authorizedParties: authorizedParties?.length ? authorizedParties : undefined });
+    c.set('userId', payload.sub);
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  await next();
+});
+
 app.get('/api/realtime/users/:userId', async (c) => {
   const userId = c.req.param('userId');
-  if (c.req.query('user_id') !== userId) return c.json({ error: 'Forbidden' }, 403);
+  if (c.get('userId') !== userId) return c.json({ error: 'Forbidden' }, 403);
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first<UserAccount>();
   if (!user) return c.json({ error: 'User not found' }, 404);
   if (!c.env.REALTIME) return c.json({ error: 'Realtime is not configured' }, 503);
@@ -59,8 +76,7 @@ app.get('/api/realtime/users/:userId', async (c) => {
 
 app.get('/api/realtime/projects/:projectId', async (c) => {
   const projectId = c.req.param('projectId');
-  const userId = c.req.query('user_id');
-  if (!userId) return c.json({ error: 'user_id is required' }, 400);
+  const userId = c.get('userId');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
   const member = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, userId).first<ProjectMember>();
@@ -70,10 +86,10 @@ app.get('/api/realtime/projects/:projectId', async (c) => {
 });
 
 app.post('/api/users', async (c) => {
-  const body = await c.req.json() as { id?: string; nickname?: string };
-  const id = body.id?.trim();
+  const body = await c.req.json() as { nickname?: string };
+  const id = c.get('userId');
   const nickname = body.nickname?.trim();
-  if (!id || !nickname) return c.json({ error: 'id and nickname are required' }, 400);
+  if (!nickname) return c.json({ error: 'nickname is required' }, 400);
   if (nickname.length > 40) return c.json({ error: 'nickname must be 40 characters or fewer' }, 400);
 
   const now = new Date().toISOString();
@@ -85,10 +101,15 @@ app.post('/api/users', async (c) => {
   return c.json(user, 201);
 });
 
+app.get('/api/users/me', async (c) => {
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(c.get('userId')).first<UserAccount>();
+  return user ? c.json(user) : c.json({ error: 'User not found' }, 404);
+});
+
 app.put('/api/users/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as { user_id?: string; nickname?: string; avatar_color?: string };
-  if (body.user_id !== id) return c.json({ error: 'Forbidden' }, 403);
+  const body = await c.req.json() as { nickname?: string; avatar_color?: string };
+  if (c.get('userId') !== id) return c.json({ error: 'Forbidden' }, 403);
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserAccount>();
   if (!user) return c.json({ error: 'User not found' }, 404);
   const nickname = body.nickname?.trim();
@@ -111,12 +132,14 @@ app.get('/api/users', async (c) => {
 });
 
 app.get('/api/users/:id/project-notifications', async (c) => {
+  if (c.get('userId') !== c.req.param('id')) return c.json({ error: 'Forbidden' }, 403);
   const { results } = await c.env.DB.prepare(`SELECT p.id AS project_id, p.name AS project_name FROM project_members pm JOIN projects p ON p.id = pm.project_id WHERE pm.user_id = ? AND pm.role = 'member' AND pm.notified_at IS NULL ORDER BY pm.created_at ASC`).bind(c.req.param('id')).all<{ project_id: string; project_name: string }>();
   return c.json(results);
 });
 
 app.post('/api/users/:id/project-notifications/acknowledge', async (c) => {
   const userId = c.req.param('id');
+  if (c.get('userId') !== userId) return c.json({ error: 'Forbidden' }, 403);
   const projectIds = ((await c.req.json()) as { project_ids?: string[] }).project_ids;
   if (!Array.isArray(projectIds) || !projectIds.length) return c.json({ error: 'project_ids is required' }, 400);
   const now = new Date().toISOString();
@@ -125,10 +148,10 @@ app.post('/api/users/:id/project-notifications/acknowledge', async (c) => {
 });
 
 app.post('/api/projects', async (c) => {
-  const body = await c.req.json() as { name?: string; description?: string; user_id?: string };
+  const body = await c.req.json() as { name?: string; description?: string };
   const name = body.name?.trim();
-  const userId = body.user_id?.trim();
-  if (!name || !userId) return c.json({ error: 'name and user_id are required' }, 400);
+  const userId = c.get('userId');
+  if (!name) return c.json({ error: 'name is required' }, 400);
 
   const now = new Date().toISOString();
   const order = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_members WHERE user_id = ? AND role = 'owner'").bind(userId).first<{ next_order: number }>();
@@ -149,16 +172,15 @@ app.post('/api/projects', async (c) => {
 });
 
 app.get('/api/projects', async (c) => {
-  const userId = c.req.query('user_id');
-  if (!userId) return c.json({ error: 'user_id is required' }, 400);
+  const userId = c.get('userId');
   const { results } = await c.env.DB.prepare(`SELECT DISTINCT p.*, COALESCE(pm.sort_order, 0) AS sort_order FROM projects p LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ? WHERE p.owner_id = ? OR pm.user_id = ? ORDER BY sort_order ASC, p.created_at ASC`).bind(userId, userId, userId).all<Project & { sort_order: number }>();
   return c.json(results);
 });
 
 app.put('/api/users/:userId/project-order', async (c) => {
   const userId = c.req.param('userId');
-  const body = await c.req.json() as { user_id?: string; group?: 'owner' | 'member'; project_ids?: string[] };
-  if (body.user_id !== userId) return c.json({ error: 'Forbidden' }, 403);
+  const body = await c.req.json() as { group?: 'owner' | 'member'; project_ids?: string[] };
+  if (c.get('userId') !== userId) return c.json({ error: 'Forbidden' }, 403);
   if (!['owner', 'member'].includes(body.group ?? '') || !Array.isArray(body.project_ids)) return c.json({ error: 'group and project_ids are required' }, 400);
   if (new Set(body.project_ids).size !== body.project_ids.length) return c.json({ error: 'project_ids must be unique' }, 400);
 
@@ -187,13 +209,14 @@ app.get('/api/projects/:id', async (c) => {
 
 app.put('/api/projects/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as { name?: string; description?: string | null; user_id?: string };
+  const body = await c.req.json() as { name?: string; description?: string | null };
+  const userId = c.get('userId');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
-  if (!body.user_id || project.owner_id !== body.user_id) return c.json({ error: 'Only the owner can update the project' }, 403);
+  if (project.owner_id !== userId) return c.json({ error: 'Only the owner can update the project' }, 403);
   const updated: Project = { ...project, name: body.name?.trim() || project.name, description: body.description === undefined ? project.description : body.description, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?').bind(updated.name, updated.description, updated.updated_at, id).run();
-  await broadcast(c.env, `project:${id}`, { type: 'project.updated', project_id: id, user_id: body.user_id });
+  await broadcast(c.env, `project:${id}`, { type: 'project.updated', project_id: id, user_id: userId });
   return c.json(updated);
 });
 
@@ -203,7 +226,7 @@ app.delete('/api/projects/:id', async (c) => {
   // DELETE is idempotent. A project created by the frontend's offline fallback
   // does not exist in D1, but removing it from the client is still successful.
   if (!project) return c.json({ success: true });
-  if (!c.req.query('user_id') || project.owner_id !== c.req.query('user_id')) return c.json({ error: 'Only the owner can delete the project' }, 403);
+  if (project.owner_id !== c.get('userId')) return c.json({ error: 'Only the owner can delete the project' }, 403);
   const { results: members } = await c.env.DB.prepare("SELECT user_id FROM project_members WHERE project_id = ? AND role = 'member'").bind(id).all<Pick<ProjectMember, 'user_id'>>();
 
   // Delete dependants explicitly so this also works if foreign-key enforcement is
@@ -230,10 +253,10 @@ app.get('/api/projects/:id/members', async (c) => {
 
 app.post('/api/projects/:id/members', async (c) => {
   const projectId = c.req.param('id');
-  const body = await c.req.json() as { owner_id?: string; user_id?: string };
+  const body = await c.req.json() as { user_id?: string };
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
-  if (!body.owner_id || project.owner_id !== body.owner_id) return c.json({ error: 'Only the owner can add members' }, 403);
+  if (project.owner_id !== c.get('userId')) return c.json({ error: 'Only the owner can add members' }, 403);
   if (!body.user_id || body.user_id === project.owner_id) return c.json({ error: 'A valid member user_id is required' }, 400);
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(body.user_id).first<UserAccount>();
   if (!user) return c.json({ error: 'User not found' }, 404);
@@ -253,7 +276,7 @@ app.delete('/api/projects/:id/members/:userId', async (c) => {
   const projectId = c.req.param('id');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
-  if (project.owner_id !== c.req.query('owner_id')) return c.json({ error: 'Only the owner can remove members' }, 403);
+  if (project.owner_id !== c.get('userId')) return c.json({ error: 'Only the owner can remove members' }, 403);
   if (c.req.param('userId') === project.owner_id) return c.json({ error: 'The owner cannot be removed' }, 400);
   await c.env.DB.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'").bind(projectId, c.req.param('userId')).run();
   await Promise.all([
@@ -265,8 +288,7 @@ app.delete('/api/projects/:id/members/:userId', async (c) => {
 
 app.post('/api/projects/:id/leave', async (c) => {
   const projectId = c.req.param('id');
-  const userId = ((await c.req.json()) as { user_id?: string }).user_id;
-  if (!userId) return c.json({ error: 'user_id is required' }, 400);
+  const userId = c.get('userId');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
   if (!project) return c.json({ error: 'Project not found' }, 404);
   if (project.owner_id === userId) return c.json({ error: 'The owner cannot leave the project' }, 400);
@@ -325,11 +347,12 @@ app.put('/api/columns/:id', async (c) => {
 });
 
 app.post('/api/todos', async (c) => {
-  const body = await c.req.json() as { project_id?: string; topic_id?: string | null; title?: string; description?: string; column_name?: string; user_id?: string };
+  const body = await c.req.json() as { project_id?: string; topic_id?: string | null; title?: string; description?: string; column_name?: string };
+  const userId = c.get('userId');
   const title = body.title?.trim();
-  if (!body.project_id || !title || !body.column_name || !body.user_id) return c.json({ error: 'project_id, title, column_name and user_id are required' }, 400);
+  if (!body.project_id || !title || !body.column_name) return c.json({ error: 'project_id, title and column_name are required' }, 400);
   const now = new Date().toISOString();
-  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: body.user_id, assignee_id: body.user_id, created_at: now, updated_at: now };
+  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.created', project_id: todo.project_id, user_id: todo.user_id });
   return c.json(todo, 201);
@@ -358,12 +381,12 @@ app.get('/api/todos/:id/comments', async (c) => {
 
 app.post('/api/todos/:id/comments', async (c) => {
   const todoId = c.req.param('id');
-  const body = await c.req.json() as { user_id?: string; body?: string };
+  const body = await c.req.json() as { body?: string };
   const commentBody = body.body?.trim();
-  if (!body.user_id || !commentBody) return c.json({ error: 'user_id and body are required' }, 400);
+  if (!commentBody) return c.json({ error: 'body is required' }, 400);
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(todoId).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
-  const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: body.user_id, body: commentBody, created_at: new Date().toISOString() };
+  const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: c.get('userId'), body: commentBody, created_at: new Date().toISOString() };
   await c.env.DB.prepare('INSERT INTO todo_comments (id, todo_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)').bind(comment.id, comment.todo_id, comment.user_id, comment.body, comment.created_at).run();
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(comment.user_id).first<UserAccount>();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'comment.created', project_id: todo.project_id, user_id: comment.user_id });

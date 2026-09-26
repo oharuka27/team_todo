@@ -75,7 +75,7 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], r
     setIsSaving(true)
     setError(null)
     try {
-      const created = await apiClient.createTodoComment(todo.id, userId, body)
+      const created = await apiClient.createTodoComment(todo.id, body)
       setComments((items) => [...items, created])
       setComment('')
     } catch {

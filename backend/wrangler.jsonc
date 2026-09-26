@@ -20,12 +20,14 @@
   "env": {
     "production": {
       "vars": {
-        "ENVIRONMENT": "production"
+        "ENVIRONMENT": "production",
+        "CLERK_AUTHORIZED_PARTIES": "https://team-todo.mitenecolab.com"
       }
     }
   },
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "development",
+    "CLERK_AUTHORIZED_PARTIES": "https://team-todo.mitenecolab.com"
   },
   "observability": {
     "enabled": true
