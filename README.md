@@ -172,29 +172,20 @@ GET    /api/realtime/projects/:projectId       # プロジェクト内の変更�
 
 ## 🚢 デプロイ
 
-### バックエンド（Cloudflare Workers）
+frontend / backend とも Cloudflare Workers Builds で GitHub と連携しており、`main` への push で自動的にビルド・デプロイされます。
 
-```bash
-cd backend
-npm run deploy   # 本番D1へのマイグレーション適用 → Worker のデプロイ
-```
+| | ルートディレクトリ | ビルドコマンド | デプロイコマンド |
+|---|---|---|---|
+| バックエンド（`team-todo-backend`） | `/backend` | `npm run build`（型チェック） | `npm run deploy`（本番D1へのマイグレーション適用 → Worker のデプロイ） |
+| フロントエンド（`team-todo`） | `/frontend` | `npm run build` | `npx wrangler deploy` |
 
-初回のみ、本番用の Clerk シークレットを登録します。
+- `package.json` の `build` / `deploy` スクリプトは Cloudflare のビルドから呼ばれるため、名前を変えたり削除したりしないでください。
+- フロントエンドのビルド変数（Build variables）に `VITE_API_URL`（バックエンドの URL）と `VITE_CLERK_PUBLISHABLE_KEY`（本番用の `pk_live_...`）を設定しています。
+- バックエンドの `CLERK_AUTHORIZED_PARTIES` は `wrangler.jsonc` の `vars` で管理しています。
+- 本番用の Clerk シークレットは初回のみ登録します: `cd backend && npx wrangler secret put CLERK_SECRET_KEY --env=""`（`sk_live_...`）
+- 手元から直接デプロイする場合は `cd backend && npm run deploy` を実行します。
 
-```bash
-npx wrangler secret put CLERK_SECRET_KEY --env=""   # sk_live_...
-```
-
-`CLERK_AUTHORIZED_PARTIES` は `wrangler.jsonc` の `vars` で管理しています。
-
-### フロントエンド（Cloudflare Workers Builds）
-
-`main` への push で Cloudflare が `/frontend` を自動ビルド・デプロイします。ビルド変数（Build variables）に次を設定しています。
-
-- `VITE_API_URL`: バックエンドの URL
-- `VITE_CLERK_PUBLISHABLE_KEY`: 本番用の `pk_live_...`
-
-スキーマ変更を含む場合は、バックエンドを先にデプロイしてからフロントエンドを push してください。
+frontend と backend は同時にビルドされるため、どちらが先に反映されるかは決まっていません。API やスキーマを変更するときは、新旧どちらの組み合わせでも動くように変更してください（例: 新しい項目は省略可能にして古いリクエストも受け付ける）。
 
 ## 📬 CI（GitHub Actions）
 
