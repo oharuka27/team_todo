@@ -1,7 +1,6 @@
 import { verifyToken } from '@clerk/backend';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { v4 as uuidv4 } from 'uuid';
 
 interface Bindings { DB: D1Database; ENVIRONMENT: string; REALTIME?: DurableObjectNamespace; CLERK_SECRET_KEY: string; CLERK_AUTHORIZED_PARTIES?: string }
 interface Variables { userId: string }
@@ -190,12 +189,12 @@ app.post('/api/projects', async (c) => {
   if (!name) return c.json({ error: 'name is required' }, 400);
 
   const now = new Date().toISOString();
-  const project: Project = { id: uuidv4(), name, description: body.description?.trim() || null, owner_id: userId, created_at: now, updated_at: now };
+  const project: Project = { id: crypto.randomUUID(), name, description: body.description?.trim() || null, owner_id: userId, created_at: now, updated_at: now };
   const columns = [
-    { id: uuidv4(), title: 'To Do', position: 0 },
-    { id: uuidv4(), title: 'In Progress', position: 1 },
-    { id: uuidv4(), title: 'In Review', position: 2 },
-    { id: uuidv4(), title: 'Done', position: 3 },
+    { id: crypto.randomUUID(), title: 'To Do', position: 0 },
+    { id: crypto.randomUUID(), title: 'In Progress', position: 1 },
+    { id: crypto.randomUUID(), title: 'In Review', position: 2 },
+    { id: crypto.randomUUID(), title: 'Done', position: 3 },
   ];
 
   await c.env.DB.batch([
@@ -356,7 +355,7 @@ app.post('/api/projects/:projectId/topics', async (c) => {
   if (!name) return c.json({ error: 'name is required' }, 400);
   const color = body.color && /^#[0-9a-fA-F]{6}$/.test(body.color) ? body.color.toLowerCase() : '#72b7a8';
   const now = new Date().toISOString();
-  const topic: Topic = { id: uuidv4(), project_id: projectId, name, color, created_at: now, updated_at: now };
+  const topic: Topic = { id: crypto.randomUUID(), project_id: projectId, name, color, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO topics (id, project_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(topic.id, topic.project_id, topic.name, topic.color, now, now).run();
   await broadcast(c.env, `project:${projectId}`, { type: 'topic.created', project_id: projectId });
   return c.json(topic, 201);
@@ -403,7 +402,7 @@ app.post('/api/todos', async (c) => {
   const column = await resolveColumn(c.env, body.project_id, body);
   if (!column) return c.json({ error: 'column must belong to the project' }, 400);
   const now = new Date().toISOString();
-  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_id: column.id, column_name: column.title, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
+  const todo: TodoItem & { topic_id: string | null } = { id: crypto.randomUUID(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_id: column.id, column_name: column.title, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_id, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_id, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.created', project_id: todo.project_id, user_id: todo.user_id });
   return c.json(todo, 201);
@@ -452,7 +451,7 @@ app.post('/api/todos/:id/comments', async (c) => {
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
   const { error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
   if (error) return c.json({ error: error.message }, error.status);
-  const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: c.get('userId'), body: commentBody, created_at: new Date().toISOString() };
+  const comment: TodoComment = { id: crypto.randomUUID(), todo_id: todoId, user_id: c.get('userId'), body: commentBody, created_at: new Date().toISOString() };
   await c.env.DB.prepare('INSERT INTO todo_comments (id, todo_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)').bind(comment.id, comment.todo_id, comment.user_id, comment.body, comment.created_at).run();
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(comment.user_id).first<UserAccount>();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'comment.created', project_id: todo.project_id, user_id: comment.user_id });

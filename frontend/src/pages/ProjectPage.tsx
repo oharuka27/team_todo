@@ -1,168 +1,127 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { apiClient, type BoardColumn, type Project, type ProjectMember, type TodoItem, type Topic, type UserAccount } from '../services/api'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import AssigneeFilter, { ALL_ASSIGNEES, UNASSIGNED } from '../components/AssigneeFilter'
+import KanbanColumn from '../components/KanbanColumn'
+import MemberDialog from '../components/MemberDialog'
+import ProjectHeader from '../components/ProjectHeader'
 import TaskDetailModal from '../components/TaskDetailModal'
+import type { AssigneeBadge, TopicBadge } from '../components/TodoCard'
+import TopicSection from '../components/TopicSection'
+import { useRealtimeSocket } from '../hooks/useRealtimeSocket'
+import { apiClient, type BoardColumn, type Project, type ProjectMember, type TodoItem, type Topic } from '../services/api'
+import { DEFAULT_AVATAR_COLOR, initialOf } from '../utils/avatar'
 import '../styles/ProjectPage.css'
 
-interface ProjectPageProps { project: Project; userId: string; nickname: string; avatarColor?: string; onProjectUpdated: (project: Project) => void }
-const defaultColumns = (): BoardColumn[] => [
-  { id: 'todo', title: 'To Do', position: 0 }, { id: 'progress', title: 'In Progress', position: 1 },
-  { id: 'review', title: 'In Review', position: 2 }, { id: 'done', title: 'Done', position: 3 },
-]
-const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-const TOPIC_COLORS = ['#5baF9f', '#5f91c9', '#8b78c6', '#d1849f', '#dc8b62', '#d2aa45', '#73a95c', '#4ea4b8', '#9a8068', '#7c8da8']
-const avatarTextColor = (backgroundColor: string) => {
-  const hex = backgroundColor.match(/^#([0-9a-f]{6})$/i)?.[1]
-  if (!hex) return '#29464b'
-  const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
-  const [red, green, blue] = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
-  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-  return luminance > 0.45 ? '#29464b' : '#ffffff'
+interface ProjectPageProps {
+  project: Project
+  userId: string
+  nickname: string
+  avatarColor?: string
+  onProjectUpdated: (project: Project) => void
 }
 
-export default function ProjectPage({ project, userId, nickname, avatarColor = '#4a9c9b', onProjectUpdated }: ProjectPageProps) {
+const defaultColumns = (): BoardColumn[] => [
+  { id: 'todo', title: 'To Do', position: 0 },
+  { id: 'progress', title: 'In Progress', position: 1 },
+  { id: 'review', title: 'In Review', position: 2 },
+  { id: 'done', title: 'Done', position: 3 },
+]
+const TOPIC_COLORS = ['#5baF9f', '#5f91c9', '#8b78c6', '#d1849f', '#dc8b62', '#d2aa45', '#73a95c', '#4ea4b8', '#9a8068', '#7c8da8']
+
+const SearchIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+
+// Tasks created before column IDs existed (or loaded offline) fall back to matching by title.
+const isInColumn = (todo: TodoItem, column: BoardColumn) => todo.column_id ? todo.column_id === column.id : todo.column_name === column.title
+
+export default function ProjectPage({ project, userId, nickname, avatarColor = DEFAULT_AVATAR_COLOR, onProjectUpdated }: ProjectPageProps) {
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [columns, setColumns] = useState<BoardColumn[]>(defaultColumns())
-  const [users, setUsers] = useState<UserAccount[]>([])
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [topics, setTopics] = useState<Topic[]>([])
-  const [activeView, setActiveView] = useState<'topics' | 'board'>('board')
-  const [newTopicName, setNewTopicName] = useState('')
-  const [addingTopicTaskId, setAddingTopicTaskId] = useState<string | null>(null)
-  const [newTopicTaskTitle, setNewTopicTaskTitle] = useState('')
-  const [draggedTopicTodoId, setDraggedTopicTodoId] = useState<string | null>(null)
-  const [topicDropTarget, setTopicDropTarget] = useState<string | null>(null)
-  const [collapsedTopicIds, setCollapsedTopicIds] = useState<string[]>([])
-  const [addingTo, setAddingTo] = useState<string | null>(null)
-  const [newTodoText, setNewTodoText] = useState('')
-  const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
-  const [editingColumnText, setEditingColumnText] = useState('')
-  const [editingTodoId, setEditingTodoId] = useState<string | null>(null)
-  const [editingTodoText, setEditingTodoText] = useState('')
-  const [savingTodoId, setSavingTodoId] = useState<string | null>(null)
-  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [assigneeFilters, setAssigneeFilters] = useState<string[]>(['all'])
-  const [isAssigneeFilterOpen, setIsAssigneeFilterOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
-  const [isEditingProjectName, setIsEditingProjectName] = useState(false)
-  const [projectName, setProjectName] = useState(project.name)
-  const [isSavingProjectName, setIsSavingProjectName] = useState(false)
   const [realtimeRevision, setRealtimeRevision] = useState(0)
+  const [activeView, setActiveView] = useState<'topics' | 'board'>('board')
+  const [query, setQuery] = useState('')
+  const [assigneeFilters, setAssigneeFilters] = useState<string[]>([ALL_ASSIGNEES])
+  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
   const [isMemberDialogOpen, setIsMemberDialogOpen] = useState(false)
-  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
-  const [isAddingMembers, setIsAddingMembers] = useState(false)
-  const [memberError, setMemberError] = useState<string | null>(null)
-  const assigneeFilterRef = useRef<HTMLDivElement>(null)
+  const [newTopicName, setNewTopicName] = useState('')
+  const [collapsedTopicIds, setCollapsedTopicIds] = useState<string[]>([])
+  const [draggedTopicTodoId, setDraggedTopicTodoId] = useState<string | null>(null)
+  const [topicDropTarget, setTopicDropTarget] = useState<string | null>(null)
+
+  const loadProjectData = useCallback(() => Promise.allSettled([
+    apiClient.getTodos(project.id),
+    apiClient.getColumns(project.id),
+    apiClient.getTopics(project.id),
+    apiClient.getProjectMembers(project.id),
+  ]), [project.id])
 
   useEffect(() => {
-    if (!isAssigneeFilterOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!assigneeFilterRef.current?.contains(event.target as Node)) setIsAssigneeFilterOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
-  }, [isAssigneeFilterOpen])
-
-  useEffect(() => {
-    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
-      .then(([todoData, columnData, topicData, memberData]) => {
-        setTodos(todoData)
-        setColumns(columnData.length ? columnData : defaultColumns())
-        setTopics(topicData)
-        setMembers(memberData)
-      })
-      .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('プロジェクトを読み込めませんでした') })
-      .finally(() => setLoading(false))
-  }, [project.id])
-
-  useEffect(() => {
-    if (typeof apiClient.connectProjectEvents !== 'function') return
     let active = true
-    let socket: WebSocket | null = null
-    let retryId: number | null = null
-    const reload = async (event: MessageEvent) => {
+    loadProjectData().then(([todoResult, columnResult, topicResult, memberResult]) => {
       if (!active) return
-      let type = ''
-      try { type = (JSON.parse(String(event.data)) as { type?: string }).type ?? '' } catch { return }
-      window.dispatchEvent(new Event('team-todo-refresh'))
-      if (type === 'project.deleted') return
-      const [todoResult, columnResult, topicResult, memberResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
-      if (!active) return
+      if (todoResult.status === 'rejected' || columnResult.status === 'rejected') setNotice('プロジェクトを読み込めませんでした')
       if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
-      if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
+      if (columnResult.status === 'fulfilled' && columnResult.value.length) setColumns(columnResult.value)
       if (topicResult.status === 'fulfilled') setTopics(topicResult.value)
       if (memberResult.status === 'fulfilled') setMembers(memberResult.value)
-      setRealtimeRevision((revision) => revision + 1)
-      if (type === 'project.updated') {
-        try { onProjectUpdated(await apiClient.getProject(project.id)) } catch { /* refresh on the next event */ }
-      }
+      setLoading(false)
+    })
+    return () => { active = false }
+  }, [loadProjectData])
+
+  useRealtimeSocket(`project:${project.id}`, () => apiClient.connectProjectEvents(project.id), async (event) => {
+    let type = ''
+    try {
+      type = (JSON.parse(String(event.data)) as { type?: string }).type ?? ''
+    } catch {
+      return
     }
-    const connect = async () => {
-      if (!active) return
+    window.dispatchEvent(new Event('team-todo-refresh'))
+    if (type === 'project.deleted') return
+    const [todoResult, columnResult, topicResult, memberResult] = await loadProjectData()
+    if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
+    if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
+    if (topicResult.status === 'fulfilled') setTopics(topicResult.value)
+    if (memberResult.status === 'fulfilled') setMembers(memberResult.value)
+    setRealtimeRevision((revision) => revision + 1)
+    if (type === 'project.updated') {
       try {
-        const nextSocket = await apiClient.connectProjectEvents(project.id)
-        if (!active) { nextSocket.close(); return }
-        socket = nextSocket
-        socket.onmessage = reload
-        socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
-        socket.onerror = () => socket?.close()
-      } catch { if (active) retryId = window.setTimeout(connect, 5_000) }
+        onProjectUpdated(await apiClient.getProject(project.id))
+      } catch { /* refresh on the next event */ }
     }
-    void connect()
-    return () => {
-      active = false
-      if (retryId !== null) window.clearTimeout(retryId)
-      socket?.close()
-    }
-  }, [project.id, onProjectUpdated])
+  })
 
   const filteredTodos = useMemo(() => todos.filter((todo) => {
     const matchesQuery = todo.title.toLowerCase().includes(query.toLowerCase())
-    const matchesAssignee = assigneeFilters.includes('all') || (assigneeFilters.includes('unassigned') && !todo.assignee_id) || (!!todo.assignee_id && assigneeFilters.includes(todo.assignee_id))
+    const matchesAssignee = assigneeFilters.includes(ALL_ASSIGNEES)
+      || (assigneeFilters.includes(UNASSIGNED) && !todo.assignee_id)
+      || (!!todo.assignee_id && assigneeFilters.includes(todo.assignee_id))
     return matchesQuery && matchesAssignee
   }), [assigneeFilters, todos, query])
-  const memberCandidates = useMemo(() => {
-    const memberIds = new Set(members.map((member) => member.user_id))
-    return users.filter((user) => user.id !== project.owner_id && !memberIds.has(user.id))
-  }, [members, project.owner_id, users])
-  // Tasks created before column IDs existed (or loaded offline) fall back to matching by title.
-  const inColumn = (todo: TodoItem, column: BoardColumn) => todo.column_id ? todo.column_id === column.id : todo.column_name === column.title
-  const columnTodos = (column: BoardColumn) => filteredTodos.filter((todo) => inColumn(todo, column))
-  const assigneeDisplay = (todo: TodoItem) => {
+
+  const assigneeOf = (todo: TodoItem): AssigneeBadge => {
     if (!todo.assignee_id) return { initial: '未', name: '未アサイン', color: '#a8b0b3', unassigned: true }
     const member = members.find((item) => item.user_id === todo.assignee_id)
-    const name = member?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
-    const color = member?.avatar_color ?? (todo.assignee_id === userId ? avatarColor : '#d9eee8')
-    return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, color, unassigned: false }
+    const isSelf = todo.assignee_id === userId
+    const name = member?.nickname ?? (isSelf ? nickname : '不明な担当者')
+    const color = member?.avatar_color ?? (isSelf ? avatarColor : '#d9eee8')
+    return { initial: initialOf(name), name, color, unassigned: false }
   }
-  const topicDisplay = (todo: TodoItem) => {
+
+  const topicOf = (todo: TodoItem): TopicBadge => {
     if (!todo.topic_id) return { name: '無所属', color: '#7f9298', unassigned: true }
     const topic = topics.find((item) => item.id === todo.topic_id)
     return { name: topic?.name ?? '不明なトピック', color: topic?.color || '#5f91c9', unassigned: !topic }
   }
 
-  const addTodo = async (column: BoardColumn) => {
-    if (!newTodoText.trim()) return
-    const title = newTodoText.trim()
+  const replaceTodo = (updated: TodoItem) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))
+
+  const addTodo = async (column: BoardColumn, title: string) => {
     const now = new Date().toISOString()
     const temporaryId = `pending-${crypto.randomUUID()}`
-    const temporaryTodo: TodoItem = {
-      id: temporaryId,
-      project_id: project.id,
-      title,
-      status: 'not_started',
-      column_id: column.id,
-      column_name: column.title,
-      user_id: userId,
-      created_at: now,
-      updated_at: now,
-    }
-
-    setTodos((items) => [...items, temporaryTodo])
-    setNewTodoText('')
-    setAddingTo(null)
-
+    setTodos((items) => [...items, { id: temporaryId, project_id: project.id, title, status: 'not_started', column_id: column.id, column_name: column.title, user_id: userId, created_at: now, updated_at: now }])
     try {
       const created = await apiClient.createTodo(project.id, title, column.id)
       setTodos((items) => items.map((todo) => todo.id === temporaryId ? created : todo))
@@ -171,227 +130,203 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       setNotice('タスクを追加できませんでした')
     }
   }
+
   const deleteTodo = async (id: string) => {
     const removed = todos.find((todo) => todo.id === id)
     setTodos((items) => items.filter((todo) => todo.id !== id))
-    try { await apiClient.deleteTodo(id) }
-    catch {
+    try {
+      await apiClient.deleteTodo(id)
+    } catch {
       if (removed) setTodos((items) => items.some((todo) => todo.id === id) ? items : [...items, removed])
       setNotice('タスクを削除できませんでした')
     }
   }
+
   const moveTodo = async (id: string, column: BoardColumn) => {
-    const previous = todos; setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_id: column.id, column_name: column.title } : todo))
-    try { await apiClient.updateTodo(id, { column_id: column.id }) } catch { setTodos(previous); setNotice('タスクを移動できませんでした') }
-  }
-  const startTodoEdit = (todo: TodoItem) => {
-    setEditingTodoId(todo.id)
-    setEditingTodoText(todo.title)
-  }
-  const cancelTodoEdit = () => {
-    if (savingTodoId) return
-    setEditingTodoId(null)
-    setEditingTodoText('')
-  }
-  const saveTodoTitle = async (todo: TodoItem) => {
-    const title = editingTodoText.trim()
-    if (!title || savingTodoId) return
-    if (title === todo.title) { cancelTodoEdit(); return }
-    setSavingTodoId(todo.id)
-    setNotice(null)
+    const previous = todos
+    setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_id: column.id, column_name: column.title } : todo))
     try {
-      const updated = await apiClient.updateTodo(todo.id, { title })
-      setTodos((items) => items.map((item) => item.id === todo.id ? updated : item))
-      setEditingTodoId(null)
-      setEditingTodoText('')
+      await apiClient.updateTodo(id, { column_id: column.id })
     } catch {
-      setNotice('タスク名を更新できませんでした')
-    } finally {
-      setSavingTodoId(null)
+      setTodos(previous)
+      setNotice('タスクを移動できませんでした')
     }
   }
-  const saveColumn = async (column: BoardColumn) => {
-    const title = editingColumnText.trim(); if (!title) return
-    setEditingColumnId(null)
-    if (title === column.title) return
-    const previousColumns = columns, previousTodos = todos
-    setColumns((items) => items.map((item) => item.id === column.id ? { ...item, title } : item)); setTodos((items) => items.map((todo) => inColumn(todo, column) ? { ...todo, column_name: title } : todo))
-    try { await apiClient.updateColumn(column.id, title) } catch { setColumns(previousColumns); setTodos(previousTodos); setNotice('列名を変更できませんでした') }
+
+  const renameTodo = async (todo: TodoItem, title: string) => {
+    setNotice(null)
+    try {
+      replaceTodo(await apiClient.updateTodo(todo.id, { title }))
+    } catch (error) {
+      setNotice('タスク名を更新できませんでした')
+      throw error
+    }
   }
 
-  const createTopic = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const name = newTopicName.trim(); if (!name) return
-    try { const created = await apiClient.createTopic(project.id, name, TOPIC_COLORS[topics.length % TOPIC_COLORS.length]); setTopics((items) => [...items, created]); setNewTopicName('') }
-    catch { setNotice('トピックを作成できませんでした') }
+  const renameColumn = async (column: BoardColumn, title: string) => {
+    const previousColumns = columns
+    const previousTodos = todos
+    setColumns((items) => items.map((item) => item.id === column.id ? { ...item, title } : item))
+    setTodos((items) => items.map((todo) => isInColumn(todo, column) ? { ...todo, column_name: title } : todo))
+    try {
+      await apiClient.updateColumn(column.id, title)
+    } catch {
+      setColumns(previousColumns)
+      setTodos(previousTodos)
+      setNotice('列名を変更できませんでした')
+    }
   }
-  const createTopicTask = async (topicId: string | null) => {
-    const title = newTopicTaskTitle.trim(); if (!title) return
+
+  const renameProject = async (name: string) => {
+    setNotice(null)
+    try {
+      onProjectUpdated(await apiClient.updateProject(project.id, { name }))
+    } catch (error) {
+      setNotice('プロジェクト名を更新できませんでした')
+      throw error
+    }
+  }
+
+  const createTopic = async (event: FormEvent) => {
+    event.preventDefault()
+    const name = newTopicName.trim()
+    if (!name) return
+    try {
+      const created = await apiClient.createTopic(project.id, name, TOPIC_COLORS[topics.length % TOPIC_COLORS.length])
+      setTopics((items) => [...items, created])
+      setNewTopicName('')
+    } catch {
+      setNotice('トピックを作成できませんでした')
+    }
+  }
+
+  const createTopicTask = async (topicId: string | null, title: string) => {
     try {
       const created = await apiClient.createTodo(project.id, title, columns[0]?.id ?? '', undefined, topicId)
-      setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
-    } catch { setNotice('タスクを作成できませんでした') }
+      setTodos((items) => [...items, created])
+    } catch (error) {
+      setNotice('タスクを作成できませんでした')
+      throw error
+    }
   }
+
   const moveTodoToTopic = async (topicId: string | null) => {
-    if (!draggedTopicTodoId) return
     const target = todos.find((todo) => todo.id === draggedTopicTodoId)
-    setDraggedTopicTodoId(null); setTopicDropTarget(null)
+    setDraggedTopicTodoId(null)
+    setTopicDropTarget(null)
     if (!target || (target.topic_id ?? null) === topicId) return
     const previous = todos
     setTodos((items) => items.map((todo) => todo.id === target.id ? { ...todo, topic_id: topicId } : todo))
-    try { await apiClient.updateTodo(target.id, { topic_id: topicId }) }
-    catch { setTodos(previous) }
+    try {
+      await apiClient.updateTodo(target.id, { topic_id: topicId })
+    } catch {
+      setTodos(previous)
+    }
   }
+
   const updateTopicColor = async (topicId: string, color: string) => {
     const previous = topics
     setTopics((items) => items.map((topic) => topic.id === topicId ? { ...topic, color } : topic))
-    try { const updated = await apiClient.updateTopic(topicId, { color }); setTopics((items) => items.map((topic) => topic.id === topicId ? updated : topic)) }
-    catch { setTopics(previous) }
-  }
-
-  const openMemberDialog = async () => {
-    setSelectedMemberIds([])
-    setMemberError(null)
-    setIsMemberDialogOpen(true)
-    try { setUsers(await apiClient.getUsers()) } catch { setMemberError('ユーザー一覧を取得できませんでした。') }
-  }
-  const toggleMember = (memberId: string) => setSelectedMemberIds((ids) => ids.includes(memberId) ? ids.filter((id) => id !== memberId) : [...ids, memberId])
-  const toggleAssigneeFilter = (filter: string) => {
-    if (filter === 'all') {
-      setAssigneeFilters((current) => current.includes('all') ? [] : ['all'])
-      return
-    }
-    setAssigneeFilters((current) => {
-      const allFilters = ['unassigned', ...members.map((member) => member.user_id)]
-      if (current.includes('all')) return allFilters.filter((item) => item !== filter)
-      const selected = current.filter((item) => item !== 'all')
-      const next = selected.includes(filter) ? selected.filter((item) => item !== filter) : [...selected, filter]
-      return allFilters.length > 0 && allFilters.every((item) => next.includes(item)) ? ['all'] : next
-    })
-  }
-  const addMembers = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!selectedMemberIds.length || isAddingMembers) return
-    setIsAddingMembers(true)
-    setMemberError(null)
     try {
-      const added = await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(project.id, memberId)))
-      const userById = new Map(users.map((user) => [user.id, user]))
-      setMembers((current) => [...current, ...added.map((member) => ({ ...member, avatar_color: userById.get(member.user_id)?.avatar_color }))])
-      setIsMemberDialogOpen(false)
-      setSelectedMemberIds([])
+      const updated = await apiClient.updateTopic(topicId, { color })
+      setTopics((items) => items.map((topic) => topic.id === topicId ? updated : topic))
     } catch {
-      setMemberError('メンバーを追加できませんでした。')
-      try { setMembers(await apiClient.getProjectMembers(project.id)) } catch { /* keep the last known members */ }
-    } finally {
-      setIsAddingMembers(false)
+      setTopics(previous)
     }
   }
 
   const renderTopicSection = (topic: Topic | null) => {
-    const topicKey = topic?.id ?? 'unassigned'
-    const topicName = topic?.name ?? '無所属'
-    const topicTodos = todos.filter((todo) => (todo.topic_id ?? null) === (topic?.id ?? null))
-    const collapsed = topic ? collapsedTopicIds.includes(topic.id) : false
+    const key = topic?.id ?? 'unassigned'
     const topicIndex = topic ? topics.findIndex((item) => item.id === topic.id) : -1
-    const topicColor = topic ? topic.color || TOPIC_COLORS[Math.max(0, topicIndex) % TOPIC_COLORS.length] : undefined
-    return <section className={`topic-card ${collapsed ? 'collapsed' : ''} ${topicDropTarget === topicKey ? 'drop-target' : ''}`} style={topicColor ? { backgroundColor: `${topicColor}14`, borderColor: `${topicColor}66` } : undefined} key={topicKey} onDragEnter={(event) => { if (draggedTopicTodoId) { event.preventDefault(); setTopicDropTarget(topicKey) } }} onDragOver={(event) => { if (draggedTopicTodoId) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void moveTodoToTopic(topic?.id ?? null) }}><header>{topic ? <button className="topic-collapse-button" aria-expanded={!collapsed} aria-label={`${topicName}を${collapsed ? '展開' : '折りたたむ'}`} onClick={() => setCollapsedTopicIds((ids) => ids.includes(topic.id) ? ids.filter((id) => id !== topic.id) : [...ids, topic.id])}><span className="topic-chevron" style={{ color: topicColor }}>⌄</span><span className="topic-heading"><small style={{ color: topicColor }}>TOPIC</small><h2>{topicName}</h2></span></button> : <div><span>NO TOPIC</span><h2>{topicName}</h2></div>}{topic && <input className="topic-color-picker" type="color" aria-label={`${topicName}の色`} value={topicColor} onChange={(event) => void updateTopicColor(topic.id, event.target.value)} onClick={(event) => event.stopPropagation()}/>}<b>{topicTodos.length}</b></header>{!collapsed && <div className="topic-tasks">{topicTodos.map((todo) => <button draggable key={todo.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', todo.id); setDraggedTopicTodoId(todo.id) }} onDragEnd={() => { setDraggedTopicTodoId(null); setTopicDropTarget(null) }} onClick={() => setSelectedTodoId(todo.id)}><span className="task-type">✓</span><span>{todo.title}</span><small>{todo.column_name}</small></button>)}{addingTopicTaskId === topicKey ? <form onSubmit={(event) => { event.preventDefault(); void createTopicTask(topic?.id ?? null) }}><input autoFocus aria-label={`${topicName}のタスク名`} value={newTopicTaskTitle} onChange={(event) => setNewTopicTaskTitle(event.target.value)} placeholder="タスク名"/><button type="submit" disabled={!newTopicTaskTitle.trim()}>追加</button><button type="button" onClick={() => setAddingTopicTaskId(null)}>キャンセル</button></form> : <button className="add-topic-task" onClick={() => { setAddingTopicTaskId(topicKey); setNewTopicTaskTitle('') }}>＋ タスクを追加</button>}</div>}</section>
+    return (
+      <TopicSection
+        key={key}
+        topic={topic}
+        color={topic ? topic.color || TOPIC_COLORS[Math.max(0, topicIndex) % TOPIC_COLORS.length] : undefined}
+        todos={todos.filter((todo) => (todo.topic_id ?? null) === (topic?.id ?? null))}
+        collapsed={!!topic && collapsedTopicIds.includes(topic.id)}
+        isDropTarget={topicDropTarget === key}
+        isDragging={!!draggedTopicTodoId}
+        onToggleCollapsed={() => topic && setCollapsedTopicIds((ids) => ids.includes(topic.id) ? ids.filter((id) => id !== topic.id) : [...ids, topic.id])}
+        onColorChange={(color) => topic && void updateTopicColor(topic.id, color)}
+        onDragEnter={() => setTopicDropTarget(key)}
+        onDrop={() => void moveTodoToTopic(topic?.id ?? null)}
+        onTaskDragStart={setDraggedTopicTodoId}
+        onTaskDragEnd={() => { setDraggedTopicTodoId(null); setTopicDropTarget(null) }}
+        onOpenTask={setSelectedTodoId}
+        onCreateTask={(title) => createTopicTask(topic?.id ?? null, title)}
+      />
+    )
   }
 
-  const cancelProjectNameEdit = () => {
-    if (isSavingProjectName) return
-    setProjectName(project.name)
-    setIsEditingProjectName(false)
-  }
-  const saveProjectName = async () => {
-    const name = projectName.trim()
-    if (!name || isSavingProjectName) return
-    if (name === project.name) { cancelProjectNameEdit(); return }
-    setIsSavingProjectName(true)
-    setNotice(null)
-    try {
-      const updated = await apiClient.updateProject(project.id, { name })
-      onProjectUpdated(updated)
-      setProjectName(updated.name)
-      setIsEditingProjectName(false)
-    } catch {
-      setNotice('プロジェクト名を更新できませんでした')
-    } finally {
-      setIsSavingProjectName(false)
-    }
-  }
+  const selectedTodo = selectedTodoId ? todos.find((todo) => todo.id === selectedTodoId) : undefined
 
   return (
     <section className="board-page">
-      <header className="board-header">
-        <div><span className="breadcrumb">プロジェクト / {project.name}</span>
-          {isEditingProjectName ? (
-            <div className="project-name-editor">
-              <input autoFocus aria-label="プロジェクト名" value={projectName} onChange={(event) => setProjectName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) saveProjectName(); if (event.key === 'Escape') cancelProjectNameEdit() }} disabled={isSavingProjectName} />
-              <button onClick={saveProjectName} aria-label="プロジェクト名を保存" disabled={!projectName.trim() || isSavingProjectName}>✓</button>
-              <button onClick={cancelProjectNameEdit} aria-label="プロジェクト名の変更をキャンセル" disabled={isSavingProjectName}>×</button>
-            </div>
-          ) : project.owner_id === userId ? <button className="project-name-button" onClick={() => { setProjectName(project.name); setIsEditingProjectName(true) }} aria-label="プロジェクト名を変更"><h1>{project.name}</h1></button> : <h1>{project.name}</h1>}
-          {project.description && <p>{project.description}</p>}
+      <ProjectHeader project={project} isOwner={project.owner_id === userId} members={members} onRename={renameProject} onAddMember={() => setIsMemberDialogOpen(true)} />
+      <nav className="project-view-tabs" aria-label="プロジェクト表示">
+        <button className={activeView === 'topics' ? 'active' : ''} onClick={() => setActiveView('topics')}>トピック</button>
+        <button className={activeView === 'board' ? 'active' : ''} onClick={() => setActiveView('board')}>ボード</button>
+      </nav>
+      {activeView === 'board' && (
+        <div className="board-toolbar">
+          <div className="search-box"><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ボードを検索" /></div>
+          <AssigneeFilter members={members} filters={assigneeFilters} onChange={setAssigneeFilters} />
+          {notice && <span className="offline-notice">{notice}</span>}
         </div>
-        <div className="member-stack" aria-label="プロジェクトメンバー">{members.map((member) => <span key={member.user_id} style={{ backgroundColor: member.avatar_color || '#4a9c9b' }} title={`${member.nickname}（${member.role === 'owner' ? 'オーナー' : 'メンバー'}）`}>{Array.from(member.nickname)[0]?.toUpperCase() || '?'}</span>)}{project.owner_id === userId && <button aria-label="メンバーを追加" onClick={openMemberDialog}>＋</button>}</div>
-      </header>
-      <nav className="project-view-tabs" aria-label="プロジェクト表示"><button className={activeView === 'topics' ? 'active' : ''} onClick={() => setActiveView('topics')}>トピック</button><button className={activeView === 'board' ? 'active' : ''} onClick={() => setActiveView('board')}>ボード</button></nav>
-      {activeView === 'board' && <div className="board-toolbar">
-        <div className="search-box"><SearchIcon/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ボードを検索" /></div>
-        <div className="assignee-filter" ref={assigneeFilterRef}><button type="button" aria-haspopup="true" aria-expanded={isAssigneeFilterOpen} onClick={() => setIsAssigneeFilterOpen((open) => !open)}><span>担当者</span><strong>{assigneeFilters.includes('all') ? 'すべての担当者' : `${assigneeFilters.length}件選択`}</strong><i aria-hidden="true">⌄</i></button>{isAssigneeFilterOpen && <div className="assignee-filter-menu" role="group" aria-label="担当者で絞り込む"><label><input type="checkbox" checked={assigneeFilters.includes('all')} onChange={() => toggleAssigneeFilter('all')}/>すべての担当者</label><label><input type="checkbox" checked={assigneeFilters.includes('all') || assigneeFilters.includes('unassigned')} onChange={() => toggleAssigneeFilter('unassigned')}/>未アサイン</label>{members.map((member) => <label key={member.user_id}><input type="checkbox" checked={assigneeFilters.includes('all') || assigneeFilters.includes(member.user_id)} onChange={() => toggleAssigneeFilter(member.user_id)}/><span className="filter-member-avatar" aria-hidden="true" style={{ backgroundColor: member.avatar_color || '#4a9c9b' }}>{Array.from(member.nickname)[0]?.toUpperCase() || '?'}</span>{member.nickname}</label>)}</div>}</div>{notice && <span className="offline-notice">{notice}</span>}
-      </div>}
-      {loading ? <div className="board-loading"><span/><p>プロジェクトを読み込んでいます…</p></div> : activeView === 'board' ? (
+      )}
+      {loading ? (
+        <div className="board-loading"><span /><p>プロジェクトを読み込んでいます…</p></div>
+      ) : activeView === 'board' ? (
         <div className="kanban-board">
           {columns.map((column, index) => (
-            <article className={`kanban-column column-${index % 4}`} key={column.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { const id = e.dataTransfer.getData('todo-id'); if (id) moveTodo(id, column) }}>
-              <div className="column-header">
-                {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column).length}</b></button>}
-                <button className="more-button" aria-label="列のメニュー">•••</button>
-              </div>
-              <div className="todo-list">
-                {columnTodos(column).map((todo) => {
-                  const assignee = assigneeDisplay(todo)
-                  const topic = topicDisplay(todo)
-                  return (
-                  <div className={`todo-card ${editingTodoId === todo.id ? 'editing' : ''}`} key={todo.id} draggable={editingTodoId !== todo.id} role="button" tabIndex={0} aria-label={`${todo.title}の詳細を開く`} onClick={() => { if (editingTodoId !== todo.id) setSelectedTodoId(todo.id) }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedTodoId(todo.id) } }} onDragStart={(e) => e.dataTransfer.setData('todo-id', todo.id)}>
-                    {editingTodoId === todo.id ? (
-                      <form className="todo-title-editor" onSubmit={(event) => { event.preventDefault(); saveTodoTitle(todo) }}>
-                        <input autoFocus aria-label="タスク名" value={editingTodoText} onChange={(event) => setEditingTodoText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') cancelTodoEdit() }} disabled={savingTodoId === todo.id} />
-                        <div><button type="submit" aria-label="タスク名を保存" disabled={!editingTodoText.trim() || savingTodoId === todo.id}>✓</button><button type="button" aria-label="タスク名の変更をキャンセル" onClick={cancelTodoEdit} disabled={savingTodoId === todo.id}>×</button></div>
-                      </form>
-                    ) : <><div className="todo-actions"><button className="delete-todo" onClick={(event) => { event.stopPropagation(); deleteTodo(todo.id) }} aria-label={`${todo.title}を削除`}>×</button></div><div className="todo-title-row"><p>{todo.title}</p><button className="edit-todo" onClick={(event) => { event.stopPropagation(); startTodoEdit(todo) }} aria-label={`${todo.title}を編集`}>✎</button></div></>}
-                    <div className="card-meta"><span className="task-type">✓</span><span className="task-id">TASK-{todo.id.slice(0, 3).toUpperCase()}</span><span className={`todo-topic-label ${topic.unassigned ? 'unassigned' : ''}`} style={topic.unassigned ? undefined : { color: topic.color, backgroundColor: `${topic.color}18`, borderColor: `${topic.color}55` }} title={`トピック: ${topic.name}`}><i style={topic.unassigned ? undefined : { backgroundColor: topic.color }}/>{topic.name}</span><span className={`mini-avatar ${assignee.unassigned ? 'unassigned' : ''}`} style={assignee.unassigned ? undefined : { backgroundColor: assignee.color, color: avatarTextColor(assignee.color) }} title={`担当: ${assignee.name}`}>{assignee.initial}</span></div>
-                  </div>
-                  )
-                })}
-                {addingTo === column.id ? (
-                  <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column) }}>
-                    <textarea
-                      autoFocus
-                      value={newTodoText}
-                      onChange={(e) => setNewTodoText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                          e.preventDefault()
-                          addTodo(column)
-                        }
-                        if (e.key === 'Escape') setAddingTo(null)
-                      }}
-                      placeholder="タスク名を入力"
-                    />
-                    <div><button type="submit">追加</button><button type="button" onClick={() => setAddingTo(null)}>キャンセル</button></div>
-                  </form>
-                ) : (
-                  <button className="add-task" onClick={() => { setAddingTo(column.id); setNewTodoText('') }}><span aria-hidden="true">＋</span>タスクを追加、またはドラッグ</button>
-                )}
-              </div>
-            </article>
+            <KanbanColumn
+              key={column.id}
+              column={column}
+              colorIndex={index}
+              todos={filteredTodos.filter((todo) => isInColumn(todo, column))}
+              assigneeOf={assigneeOf}
+              topicOf={topicOf}
+              onRenameColumn={(title) => void renameColumn(column, title)}
+              onAddTodo={(title) => void addTodo(column, title)}
+              onMoveTodo={(todoId) => void moveTodo(todoId, column)}
+              onOpenTodo={setSelectedTodoId}
+              onDeleteTodo={(todoId) => void deleteTodo(todoId)}
+              onRenameTodo={renameTodo}
+            />
           ))}
         </div>
-      ) : <div className="topics-page"><form className="topic-create-form" onSubmit={createTopic}><input aria-label="トピック名" value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder="新しいトピック名"/><button type="submit" disabled={!newTopicName.trim()}>トピックを作成</button></form><div className="topic-columns"><div className="topic-list topic-list-owned">{topics.length ? topics.map(renderTopicSection) : <div className="empty-topics"><p>トピックはまだありません</p><span>上のフォームから最初のトピックを作成してください。</span></div>}</div><aside className="unassigned-topic-area" aria-label="無所属タスク">{renderTopicSection(null)}</aside></div></div>}
-      {isMemberDialogOpen && <div className="board-modal-backdrop" onMouseDown={() => !isAddingMembers && setIsMemberDialogOpen(false)}><div className="board-member-modal" role="dialog" aria-modal="true" aria-labelledby="board-member-dialog-title" onMouseDown={(event) => event.stopPropagation()}><header><div><small>PROJECT MEMBERS</small><h2 id="board-member-dialog-title">メンバーを追加</h2><p>「{project.name}」</p></div><button type="button" aria-label="閉じる" onClick={() => setIsMemberDialogOpen(false)} disabled={isAddingMembers}>×</button></header><form onSubmit={addMembers}><div className="board-member-selection" role="group" aria-label="追加するメンバー">{memberCandidates.length ? memberCandidates.map((candidate) => <label key={candidate.id}><input type="checkbox" checked={selectedMemberIds.includes(candidate.id)} onChange={() => toggleMember(candidate.id)} disabled={isAddingMembers}/><span style={{ backgroundColor: candidate.avatar_color || '#4a9c9b' }}>{Array.from(candidate.nickname)[0]?.toUpperCase() || '?'}</span><strong>{candidate.nickname}</strong></label>) : <p>追加できるメンバーはいません。</p>}</div>{memberError && <p className="board-member-error" role="alert">{memberError}</p>}<footer><button type="button" onClick={() => setIsMemberDialogOpen(false)} disabled={isAddingMembers}>キャンセル</button><button type="submit" disabled={!selectedMemberIds.length || isAddingMembers}>{isAddingMembers ? '追加中…' : '追加'}</button></footer></form></div></div>}
-      {selectedTodoId && (() => { const selectedTodo = todos.find((todo) => todo.id === selectedTodoId); return selectedTodo ? <TaskDetailModal todo={selectedTodo} topics={topics} members={members} userId={userId} nickname={nickname} refreshToken={realtimeRevision} onClose={() => setSelectedTodoId(null)} onUpdated={(updated) => setTodos((items) => items.map((item) => item.id === updated.id ? updated : item))} /> : null })()}
+      ) : (
+        <div className="topics-page">
+          <form className="topic-create-form" onSubmit={createTopic}>
+            <input aria-label="トピック名" value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder="新しいトピック名" />
+            <button type="submit" disabled={!newTopicName.trim()}>トピックを作成</button>
+          </form>
+          <div className="topic-columns">
+            <div className="topic-list topic-list-owned">
+              {topics.length ? topics.map(renderTopicSection) : (
+                <div className="empty-topics"><p>トピックはまだありません</p><span>上のフォームから最初のトピックを作成してください。</span></div>
+              )}
+            </div>
+            <aside className="unassigned-topic-area" aria-label="無所属タスク">{renderTopicSection(null)}</aside>
+          </div>
+        </div>
+      )}
+      {isMemberDialogOpen && (
+        <MemberDialog project={project} mode="add" onAdded={(added) => setMembers((current) => [...current, ...added])} onClose={() => setIsMemberDialogOpen(false)} />
+      )}
+      {selectedTodo && (
+        <TaskDetailModal
+          todo={selectedTodo}
+          topics={topics}
+          members={members}
+          userId={userId}
+          nickname={nickname}
+          refreshToken={realtimeRevision}
+          onClose={() => setSelectedTodoId(null)}
+          onUpdated={replaceTodo}
+        />
+      )}
     </section>
   )
 }

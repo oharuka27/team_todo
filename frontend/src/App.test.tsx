@@ -86,7 +86,7 @@ describe('App', () => {
     fireEvent.contextMenu(await screen.findByRole('button', { name: '所有プロジェクト' }))
     await user.click(screen.getByRole('menuitem', { name: /メンバー追加/ }))
     await user.click(await screen.findByRole('checkbox', { name: /佐藤/ }))
-    await user.click(screen.getByRole('button', { name: '実行' }))
+    await user.click(screen.getByRole('button', { name: '追加' }))
 
     await waitFor(() => expect(mockedApi.addProjectMember).toHaveBeenCalledWith('owner-project', 'member-1'))
   })

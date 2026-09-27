@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { apiClient, type ProjectMember, type TodoComment, type TodoItem, type Topic } from '../services/api'
+import { initialOf } from '../utils/avatar'
 import './TaskDetailModal.css'
 
 interface TaskDetailModalProps {
@@ -79,7 +80,7 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], m
     updateTodo({ assignee_id: assigneeId || null }, () => undefined)
   }
 
-  const addComment = async (event: React.FormEvent) => {
+  const addComment = async (event: FormEvent) => {
     event.preventDefault()
     const body = comment.trim()
     if (!body || isSaving) return
@@ -96,6 +97,8 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], m
     }
   }
 
+  const commentAuthor = (item: TodoComment) => item.nickname ?? userNames.get(item.user_id) ?? '不明なユーザー'
+
   return (
     <div className="task-detail-backdrop" onMouseDown={onClose}>
       <section className="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -106,20 +109,79 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], m
         <div className="task-detail-content">
           <main>
             {isEditingTitle ? (
-              <div className="task-detail-title-editor"><input id="task-detail-title" autoFocus aria-label="詳細のタスク名" value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) saveTitle(); if (event.key === 'Escape') { setTitle(todo.title); setIsEditingTitle(false) } }} disabled={isSaving} /><button onClick={saveTitle} disabled={!title.trim() || isSaving}>保存</button></div>
-            ) : <button className="task-detail-title" onClick={() => setIsEditingTitle(true)} aria-label="タスク名を編集"><h2 id="task-detail-title">{todo.title}</h2><span>✎</span></button>}
+              <div className="task-detail-title-editor">
+                <input
+                  id="task-detail-title"
+                  autoFocus
+                  aria-label="詳細のタスク名"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) saveTitle()
+                    if (event.key === 'Escape') {
+                      setTitle(todo.title)
+                      setIsEditingTitle(false)
+                    }
+                  }}
+                  disabled={isSaving}
+                />
+                <button onClick={saveTitle} disabled={!title.trim() || isSaving}>保存</button>
+              </div>
+            ) : (
+              <button className="task-detail-title" onClick={() => setIsEditingTitle(true)} aria-label="タスク名を編集">
+                <h2 id="task-detail-title">{todo.title}</h2>
+                <span>✎</span>
+              </button>
+            )}
 
-            <section className="task-detail-section"><h3>トピック</h3><select aria-label="トピック" value={todo.topic_id ?? ''} onChange={(event) => updateTodo({ topic_id: event.target.value || null }, () => undefined)} disabled={isSaving}><option value="">未設定</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select></section>
+            <section className="task-detail-section">
+              <h3>トピック</h3>
+              <select aria-label="トピック" value={todo.topic_id ?? ''} onChange={(event) => updateTodo({ topic_id: event.target.value || null }, () => undefined)} disabled={isSaving}>
+                <option value="">未設定</option>
+                {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}
+              </select>
+            </section>
 
-            <section className="task-detail-section"><h3>説明</h3><textarea aria-label="説明" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="説明を追加してください" disabled={isSaving}/><button className="detail-save-button" onClick={saveDescription} disabled={isSaving || description.trim() === (todo.description ?? '')}>説明を保存</button></section>
+            <section className="task-detail-section">
+              <h3>説明</h3>
+              <textarea aria-label="説明" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="説明を追加してください" disabled={isSaving} />
+              <button className="detail-save-button" onClick={saveDescription} disabled={isSaving || description.trim() === (todo.description ?? '')}>説明を保存</button>
+            </section>
 
-            <section className="task-detail-section"><h3>コメント</h3><div className="comment-list">{comments.length ? comments.map((item) => <article key={item.id}><span>{Array.from(item.nickname ?? userNames.get(item.user_id) ?? '?')[0]}</span><div><strong>{item.nickname ?? userNames.get(item.user_id) ?? '不明なユーザー'}</strong><p>{item.body}</p></div></article>) : <p className="empty-comments">コメントはまだありません</p>}</div><form className="comment-form" onSubmit={addComment}><textarea aria-label="コメント" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="コメントを追加する…" disabled={isSaving}/><button type="submit" disabled={!comment.trim() || isSaving}>追加</button></form></section>
+            <section className="task-detail-section">
+              <h3>コメント</h3>
+              <div className="comment-list">
+                {comments.length ? comments.map((item) => (
+                  <article key={item.id}>
+                    <span>{initialOf(commentAuthor(item))}</span>
+                    <div><strong>{commentAuthor(item)}</strong><p>{item.body}</p></div>
+                  </article>
+                )) : <p className="empty-comments">コメントはまだありません</p>}
+              </div>
+              <form className="comment-form" onSubmit={addComment}>
+                <textarea aria-label="コメント" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="コメントを追加する…" disabled={isSaving} />
+                <button type="submit" disabled={!comment.trim() || isSaving}>追加</button>
+              </form>
+            </section>
             {error && <p className="task-detail-error" role="alert">{error}</p>}
           </main>
 
           <aside>
             <h3>詳細</h3>
-            <dl><div><dt>担当者</dt><dd><select aria-label="担当者" value={todo.assignee_id ?? ''} onChange={(event) => changeAssignee(event.target.value)} disabled={isSaving}><option value="">未割り当て</option>{assigneeOptions.map((user) => <option key={user.id} value={user.id}>{user.nickname}</option>)}</select></dd></div><div><dt>作成者</dt><dd><span className="detail-avatar">{Array.from(creatorName)[0]}</span>{creatorName}</dd></div><div><dt>状態</dt><dd>{todo.column_name}</dd></div><div><dt>作成日</dt><dd>{new Date(todo.created_at).toLocaleDateString('ja-JP')}</dd></div></dl>
+            <dl>
+              <div>
+                <dt>担当者</dt>
+                <dd>
+                  <select aria-label="担当者" value={todo.assignee_id ?? ''} onChange={(event) => changeAssignee(event.target.value)} disabled={isSaving}>
+                    <option value="">未割り当て</option>
+                    {assigneeOptions.map((user) => <option key={user.id} value={user.id}>{user.nickname}</option>)}
+                  </select>
+                </dd>
+              </div>
+              <div><dt>作成者</dt><dd><span className="detail-avatar">{initialOf(creatorName)}</span>{creatorName}</dd></div>
+              <div><dt>状態</dt><dd>{todo.column_name}</dd></div>
+              <div><dt>作成日</dt><dd>{new Date(todo.created_at).toLocaleDateString('ja-JP')}</dd></div>
+            </dl>
           </aside>
         </div>
       </section>

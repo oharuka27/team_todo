@@ -1,142 +1,102 @@
 import { SignIn, useAuth, useClerk } from '@clerk/react'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import './App.css'
+import AccountRegistrationDialog from './components/AccountRegistrationDialog'
+import ConfirmTextDialog from './components/ConfirmTextDialog'
+import CreateProjectDialog from './components/CreateProjectDialog'
+import Icon from './components/Icon'
+import MemberDialog from './components/MemberDialog'
+import NoticeDialog from './components/NoticeDialog'
+import ProjectList, { type ProjectGroup } from './components/ProjectList'
+import UserSettingsDialog from './components/UserSettingsDialog'
+import { useRealtimeSocket } from './hooks/useRealtimeSocket'
 import ProjectPage from './pages/ProjectPage'
 import { ApiError, apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
 
-const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
-)
+const DEFAULT_AVATAR_COLOR = '#4a9c9b'
 
 function App() {
   const { isLoaded, isSignedIn, userId, getToken } = useAuth()
   // Layout effects run before the workspace's data-fetching effects, so every request carries the session token.
   useLayoutEffect(() => { apiClient.setTokenProvider(() => getToken()) }, [getToken])
 
-  if (!isLoaded) return <div className="auth-screen"><div className="board-loading"><span/><p>読み込んでいます…</p></div></div>
+  if (!isLoaded) return <div className="auth-screen"><div className="board-loading"><span /><p>読み込んでいます…</p></div></div>
   if (!isSignedIn || !userId) return <div className="auth-screen"><SignIn withSignUp /></div>
   return <Workspace key={userId} userId={userId} />
 }
 
+type ContextMenu = { project: Project; x: number; y: number }
+type ProjectDialog =
+  | { kind: 'create' }
+  | { kind: 'delete' | 'leave'; project: Project }
+  | { kind: 'members'; project: Project; mode: 'add' | 'remove' }
+
 function Workspace({ userId }: { userId: string }) {
   const { signOut } = useClerk()
+  const [account, setAccount] = useState<{ nickname: string; avatarColor: string } | null>(null)
   const [isAccountLoaded, setIsAccountLoaded] = useState(false)
-  const [nickname, setNickname] = useState('')
-  const [avatarColor, setAvatarColor] = useState('#4a9c9b')
-  const [nicknameInput, setNicknameInput] = useState('')
-  const [isRegistering, setIsRegistering] = useState(false)
-  const [registrationError, setRegistrationError] = useState<string | null>(null)
+  const [accountError, setAccountError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [isCreateOpen, setIsCreateOpen] = useState(false)
-  const [newProjectName, setNewProjectName] = useState('')
-  const [isCreating, setIsCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
-  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
-  const [deleteConfirmation, setDeleteConfirmation] = useState('')
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [isWorkspaceLoaded, setIsWorkspaceLoaded] = useState(false)
   const [notifications, setNotifications] = useState<ProjectNotification[]>([])
-  const [notificationsChecked, setNotificationsChecked] = useState(false)
   const [notificationError, setNotificationError] = useState<string | null>(null)
-  const [memberDialog, setMemberDialog] = useState<{ project: Project; mode: 'add' | 'remove' } | null>(null)
-  const [memberCandidates, setMemberCandidates] = useState<UserAccount[]>([])
-  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
-  const [memberConfirmation, setMemberConfirmation] = useState('')
-  const [isUpdatingMembers, setIsUpdatingMembers] = useState(false)
-  const [memberError, setMemberError] = useState<string | null>(null)
-  const [projectToLeave, setProjectToLeave] = useState<Project | null>(null)
-  const [leaveConfirmation, setLeaveConfirmation] = useState('')
-  const [draggedProject, setDraggedProject] = useState<{ id: string; group: 'owner' | 'member' } | null>(null)
-  const [dropPreview, setDropPreview] = useState<{ group: 'owner' | 'member'; index: number } | null>(null)
-  const [deletedProjectNotices, setDeletedProjectNotices] = useState<Array<{ project_id: string; project_name: string }>>([])
+  const [deletedProjectNotices, setDeletedProjectNotices] = useState<ProjectNotification[]>([])
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
+  const [dialog, setDialog] = useState<ProjectDialog | null>(null)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [settingsNickname, setSettingsNickname] = useState('')
-  const [settingsColor, setSettingsColor] = useState('#4a9c9b')
-  const [isSavingSettings, setIsSavingSettings] = useState(false)
-  const [settingsError, setSettingsError] = useState<string | null>(null)
+
+  const nickname = account?.nickname ?? ''
+  const avatarColor = account?.avatarColor ?? DEFAULT_AVATAR_COLOR
+  const applyAccount = (user: UserAccount) => setAccount({ nickname: user.nickname, avatarColor: user.avatar_color || DEFAULT_AVATAR_COLOR })
 
   useEffect(() => {
     let active = true
     apiClient.getCurrentUser()
-      .then((account) => {
-        if (!active || !account) return
-        setNickname(account.nickname)
-        setAvatarColor(account.avatar_color || '#4a9c9b')
-      })
-      .catch(() => { if (active) setRegistrationError('アカウント情報を取得できませんでした。バックエンドへの接続を確認してください。') })
+      .then((user) => { if (active && user) setAccount({ nickname: user.nickname, avatarColor: user.avatar_color || DEFAULT_AVATAR_COLOR }) })
+      .catch(() => { if (active) setAccountError('アカウント情報を取得できませんでした。バックエンドへの接続を確認してください。') })
       .finally(() => { if (active) setIsAccountLoaded(true) })
     return () => { active = false }
   }, [])
 
+  const isRegistered = account !== null
   useEffect(() => {
-    if (!nickname) return
+    if (!isRegistered) return
     let active = true
-    setNotificationsChecked(false)
-
-    const refreshWorkspace = async (initial = false) => {
-      const [projectsResult, notificationsResult] = await Promise.allSettled([
-        apiClient.getProjects(),
-        apiClient.getProjectNotifications(userId),
-      ])
+    const refreshWorkspace = async () => {
+      const [projectsResult, notificationsResult] = await Promise.allSettled([apiClient.getProjects(), apiClient.getProjectNotifications(userId)])
       if (!active) return
-
       if (projectsResult.status === 'fulfilled') {
         const data = projectsResult.value
         setProjects(data)
         setSelectedProjectId((current) => current && data.some((project) => project.id === current) ? current : data[0]?.id ?? null)
-      } else if (initial) {
-        setProjects([])
-        setSelectedProjectId(null)
       }
       if (notificationsResult.status === 'fulfilled') setNotifications(notificationsResult.value)
-      if (initial) setNotificationsChecked(true)
+      setIsWorkspaceLoaded(true)
     }
 
-    void refreshWorkspace(true)
-    const refreshOnFocus = () => void refreshWorkspace()
-    window.addEventListener('focus', refreshOnFocus)
-    window.addEventListener('team-todo-refresh', refreshOnFocus)
+    void refreshWorkspace()
+    const refresh = () => void refreshWorkspace()
+    window.addEventListener('focus', refresh)
+    window.addEventListener('team-todo-refresh', refresh)
     return () => {
       active = false
-      window.removeEventListener('focus', refreshOnFocus)
-      window.removeEventListener('team-todo-refresh', refreshOnFocus)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('team-todo-refresh', refresh)
     }
-  }, [userId, nickname])
+  }, [userId, isRegistered])
 
-  useEffect(() => {
-    if (!nickname || typeof apiClient.connectUserEvents !== 'function') return
-    let active = true
-    let socket: WebSocket | null = null
-    let retryId: number | null = null
-    const connect = async () => {
-      if (!active) return
-      try {
-        const nextSocket = await apiClient.connectUserEvents(userId)
-        if (!active) { nextSocket.close(); return }
-        socket = nextSocket
-        socket.onmessage = (event) => {
-          try {
-            const message = JSON.parse(String(event.data)) as { type?: string; project_id?: string; project_name?: string }
-            if (message.type === 'project.deleted' && message.project_id && message.project_name) {
-              setDeletedProjectNotices((items) => items.some((item) => item.project_id === message.project_id) ? items : [...items, { project_id: message.project_id!, project_name: message.project_name! }])
-            }
-          } catch { /* ignore malformed realtime messages */ }
-          window.dispatchEvent(new Event('team-todo-refresh'))
-        }
-        socket.onclose = () => { if (active) retryId = window.setTimeout(connect, 5_000) }
-        socket.onerror = () => socket?.close()
-      } catch { if (active) retryId = window.setTimeout(connect, 5_000) }
-    }
-    void connect()
-    return () => {
-      active = false
-      if (retryId !== null) window.clearTimeout(retryId)
-      socket?.close()
-    }
-  }, [userId, nickname])
+  useRealtimeSocket(isRegistered ? `user:${userId}` : null, () => apiClient.connectUserEvents(userId), (event) => {
+    try {
+      const message = JSON.parse(String(event.data)) as { type?: string; project_id?: string; project_name?: string }
+      const { type, project_id: projectId, project_name: projectName } = message
+      if (type === 'project.deleted' && projectId && projectName) {
+        setDeletedProjectNotices((items) => items.some((item) => item.project_id === projectId) ? items : [...items, { project_id: projectId, project_name: projectName }])
+      }
+    } catch { /* ignore malformed realtime messages */ }
+    window.dispatchEvent(new Event('team-todo-refresh'))
+  })
 
   useEffect(() => {
     if (!contextMenu) return
@@ -154,101 +114,48 @@ function Workspace({ userId }: { userId: string }) {
     }
   }, [contextMenu])
 
-  const createProject = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!newProjectName.trim()) return
-    setIsCreating(true); setCreateError(null)
-    try {
-      const created = await apiClient.createProject(newProjectName.trim(), undefined)
-      setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
-      setNewProjectName(''); setIsCreateOpen(false)
-    } catch {
-      setCreateError('プロジェクトを作成できませんでした。時間をおいてもう一度お試しください。')
-    } finally {
-      setIsCreating(false)
-    }
-  }
-
-  const registerAccount = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const value = nicknameInput.trim()
-    if (!value || isRegistering) return
-    setIsRegistering(true)
-    setRegistrationError(null)
-    try {
-      const account = await apiClient.registerUser(value)
-      setNickname(account.nickname)
-      setAvatarColor(account.avatar_color || '#4a9c9b')
-      setNicknameInput('')
-    } catch {
-      setRegistrationError('アカウントを登録できませんでした。バックエンドへの接続を確認して、もう一度お試しください。')
-    } finally {
-      setIsRegistering(false)
-    }
-  }
-
   const selectedProject = projects.find((project) => project.id === selectedProjectId)
   const ownerProjects = projects.filter((project) => project.owner_id === userId)
   const memberProjects = projects.filter((project) => project.owner_id !== userId)
-  const nicknameInitial = Array.from(nickname)[0]?.toUpperCase() || '?'
+
   const updateProjectInList = useCallback((updatedProject: Project) => {
     setProjects((items) => items.map((project) => project.id === updatedProject.id ? updatedProject : project))
   }, [])
 
-  const openUserSettings = () => {
-    setIsUserMenuOpen(false)
-    setSettingsNickname(nickname)
-    setSettingsColor(avatarColor)
-    setSettingsError(null)
-    setIsSettingsOpen(true)
+  const removeProjectFromList = (projectId: string) => {
+    const removedIndex = projects.findIndex((project) => project.id === projectId)
+    const remaining = projects.filter((project) => project.id !== projectId)
+    setProjects(remaining)
+    if (selectedProjectId === projectId) setSelectedProjectId(remaining[Math.min(removedIndex, remaining.length - 1)]?.id ?? null)
   }
 
-  const saveUserSettings = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!settingsNickname.trim() || isSavingSettings) return
-    setIsSavingSettings(true); setSettingsError(null)
-    try {
-      const updated = await apiClient.updateUser(userId, settingsNickname.trim(), settingsColor)
-      setNickname(updated.nickname); setAvatarColor(updated.avatar_color || settingsColor)
-      setIsSettingsOpen(false)
-    } catch { setSettingsError('ユーザー設定を保存できませんでした。') }
-    finally { setIsSavingSettings(false) }
-  }
-
-  const openDeleteDialog = (project: Project) => {
+  const openDialog = (next: ProjectDialog) => {
     setContextMenu(null)
-    setProjectToDelete(project)
-    setDeleteConfirmation('')
-    setDeleteError(null)
+    setDialog(next)
   }
 
-  const closeDeleteDialog = () => {
-    if (isDeleting) return
-    setProjectToDelete(null)
-    setDeleteConfirmation('')
-    setDeleteError(null)
+  const deleteProject = async (project: Project) => {
+    // A 404 means the project is already gone, which is the outcome the user asked for.
+    await apiClient.deleteProject(project.id).catch((error: unknown) => {
+      if (!(error instanceof ApiError && error.status === 404)) throw error
+    })
+    removeProjectFromList(project.id)
+    setDialog(null)
   }
 
-  const deleteProject = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!projectToDelete || deleteConfirmation !== '削除' || isDeleting) return
-    setIsDeleting(true)
-    setDeleteError(null)
+  const leaveProject = async (project: Project) => {
+    await apiClient.leaveProject(project.id)
+    removeProjectFromList(project.id)
+    setDialog(null)
+  }
+
+  const reorderProjects = async (group: ProjectGroup, reordered: Project[]) => {
+    const previous = projects
+    setProjects(group === 'owner' ? [...reordered, ...memberProjects] : [...ownerProjects, ...reordered])
     try {
-      // A 404 means the project is already gone, which is the outcome the user asked for.
-      await apiClient.deleteProject(projectToDelete.id).catch((error: unknown) => { if (!(error instanceof ApiError && error.status === 404)) throw error })
-      const deletedIndex = projects.findIndex((project) => project.id === projectToDelete.id)
-      const remainingProjects = projects.filter((project) => project.id !== projectToDelete.id)
-      setProjects(remainingProjects)
-      if (selectedProjectId === projectToDelete.id) {
-        setSelectedProjectId(remainingProjects[Math.min(deletedIndex, remainingProjects.length - 1)]?.id ?? null)
-      }
-      setProjectToDelete(null)
-      setDeleteConfirmation('')
+      await apiClient.updateProjectOrder(userId, group, reordered.map((project) => project.id))
     } catch {
-      setDeleteError('プロジェクトを削除できませんでした。時間をおいてもう一度お試しください。')
-    } finally {
-      setIsDeleting(false)
+      setProjects(previous)
     }
   }
 
@@ -262,170 +169,161 @@ function Workspace({ userId }: { userId: string }) {
     }
   }
 
-  const openMemberDialog = async (project: Project, mode: 'add' | 'remove') => {
-    setContextMenu(null); setMemberDialog({ project, mode }); setSelectedMemberIds([]); setMemberConfirmation(''); setMemberError(null)
-    try {
-      const [users, members] = await Promise.all([apiClient.getUsers(), apiClient.getProjectMembers(project.id)])
-      const memberIds = new Set(members.map((member) => member.user_id))
-      setMemberCandidates(mode === 'add' ? users.filter((user) => !memberIds.has(user.id) && user.id !== userId) : users.filter((user) => memberIds.has(user.id) && user.id !== userId))
-    } catch {
-      setMemberCandidates([]); setMemberError('メンバーリストを取得できませんでした。')
-    }
-  }
-
-  const toggleMember = (memberId: string) => setSelectedMemberIds((items) => items.includes(memberId) ? items.filter((id) => id !== memberId) : [...items, memberId])
-  const updateMembers = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!memberDialog || !selectedMemberIds.length || isUpdatingMembers || (memberDialog.mode === 'remove' && memberConfirmation !== '削除')) return
-    setIsUpdatingMembers(true); setMemberError(null)
-    try {
-      if (memberDialog.mode === 'add') await Promise.all(selectedMemberIds.map((memberId) => apiClient.addProjectMember(memberDialog.project.id, memberId)))
-      else await Promise.all(selectedMemberIds.map((memberId) => apiClient.removeProjectMember(memberDialog.project.id, memberId)))
-      setMemberDialog(null)
-    } catch {
-      setMemberError(`メンバーを${memberDialog.mode === 'add' ? '追加' : '削除'}できませんでした。`)
-    } finally { setIsUpdatingMembers(false) }
-  }
-
-  const leaveProject = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!projectToLeave || leaveConfirmation !== '脱退' || isDeleting) return
-    setIsDeleting(true); setDeleteError(null)
-    try {
-      await apiClient.leaveProject(projectToLeave.id)
-      const remaining = projects.filter((project) => project.id !== projectToLeave.id)
-      setProjects(remaining)
-      if (selectedProjectId === projectToLeave.id) setSelectedProjectId(remaining[0]?.id ?? null)
-      setProjectToLeave(null); setLeaveConfirmation('')
-    } catch { setDeleteError('プロジェクトから脱退できませんでした。') }
-    finally { setIsDeleting(false) }
-  }
-
-  const reorderProjects = async (group: 'owner' | 'member', targetIndex: number) => {
-    if (!draggedProject || draggedProject.group !== group) return
-    const groupProjects = group === 'owner' ? ownerProjects : memberProjects
-    const sourceIndex = groupProjects.findIndex((project) => project.id === draggedProject.id)
-    if (sourceIndex < 0) return
-    const reordered = [...groupProjects]
-    const [moved] = reordered.splice(sourceIndex, 1)
-    const insertIndex = Math.max(0, Math.min(targetIndex - (sourceIndex < targetIndex ? 1 : 0), reordered.length))
-    reordered.splice(insertIndex, 0, moved)
-    setDraggedProject(null); setDropPreview(null)
-    if (reordered.every((project, index) => project.id === groupProjects[index]?.id)) return
-    const previous = projects
-    setProjects(group === 'owner' ? [...reordered, ...memberProjects] : [...ownerProjects, ...reordered])
-    try { await apiClient.updateProjectOrder(userId, group, reordered.map((project) => project.id)) }
-    catch { setProjects(previous) }
-  }
-
-  const renderDropZone = (group: 'owner' | 'member', index: number) => (
-    <div className={`project-drop-zone ${dropPreview?.group === group && dropPreview.index === index ? 'active' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (draggedProject?.group === group) setDropPreview({ group, index }) }} onDragOver={(event) => { if (draggedProject?.group === group) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); void reorderProjects(group, index) }} aria-hidden="true" />
-  )
-
-  const renderProjectItems = (items: Project[], offset: number, group: 'owner' | 'member') => <>
-    {items.map((project, index) => <Fragment key={project.id}>
-      {renderDropZone(group, index)}
-      <button draggable className={`project-item ${project.id === selectedProjectId ? 'active' : ''} ${draggedProject?.id === project.id ? 'dragging' : ''}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', project.id); setDraggedProject({ id: project.id, group }) }} onDragEnd={() => { setDraggedProject(null); setDropPreview(null) }} onClick={() => setSelectedProjectId(project.id)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ project, x: event.clientX, y: event.clientY }) }}>
-        <span className={`project-icon project-icon-${(index + offset) % 4}`} aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span><span className="project-name">{project.name}</span>
-      </button>
-    </Fragment>)}
-    {renderDropZone(group, items.length)}
-  </>
+  const isOwnerMenu = contextMenu?.project.owner_id === userId
 
   return (
     <div className="workspace">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><Icon size={22}><path d="M9 11l2 2 4-4"/><path d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></Icon></span><span>Team Todo</span></div>
+        <div className="brand">
+          <span className="brand-mark">
+            <Icon size={22}><path d="M9 11l2 2 4-4" /><path d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" /></Icon>
+          </span>
+          <span>Team Todo</span>
+        </div>
         <div className="sidebar-section">
           <div className="sidebar-heading"><span>プロジェクト</span><span className="project-count">{projects.length}</span></div>
-          <nav className="project-list" aria-label="プロジェクト一覧">
-            <div className="project-group"><div className="project-group-heading"><span>オーナープロジェクト</span><b>{ownerProjects.length}</b></div>{renderProjectItems(ownerProjects, 0, 'owner')}</div>
-            <div className="project-group"><div className="project-group-heading"><span>メンバープロジェクト</span><b>{memberProjects.length}</b></div>{renderProjectItems(memberProjects, ownerProjects.length, 'member')}</div>
-          </nav>
-          <button className="add-project-button" onClick={() => { setCreateError(null); setIsCreateOpen(true) }}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
+          <ProjectList
+            ownerProjects={ownerProjects}
+            memberProjects={memberProjects}
+            selectedProjectId={selectedProjectId}
+            onSelect={setSelectedProjectId}
+            onContextMenu={(project, x, y) => setContextMenu({ project, x, y })}
+            onReorder={(group, reordered) => void reorderProjects(group, reordered)}
+          />
+          <button className="add-project-button" onClick={() => openDialog({ kind: 'create' })}>
+            <Icon size={18}><path d="M12 5v14M5 12h14" /></Icon>プロジェクトを追加
+          </button>
         </div>
-        {nickname && <div className="sidebar-footer"><button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">{nicknameInitial}</button><div><strong>{nickname}</strong><small>オンライン</small></div>{isUserMenuOpen && <div className="user-settings-menu" role="menu"><button role="menuitem" onClick={openUserSettings}>⚙ 設定</button><button role="menuitem" onClick={() => void signOut()}>↪ ログアウト</button></div>}</div>}
+        {account && (
+          <div className="sidebar-footer">
+            <button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">
+              {Array.from(nickname)[0]?.toUpperCase() || '?'}
+            </button>
+            <div><strong>{nickname}</strong><small>オンライン</small></div>
+            {isUserMenuOpen && (
+              <div className="user-settings-menu" role="menu">
+                <button role="menuitem" onClick={() => { setIsUserMenuOpen(false); setIsSettingsOpen(true) }}>⚙ 設定</button>
+                <button role="menuitem" onClick={() => void signOut()}>↪ ログアウト</button>
+              </div>
+            )}
+          </div>
+        )}
       </aside>
 
       <main className="main-area">
-        {!isAccountLoaded || (!notificationsChecked && nickname) ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} /> : (
-          <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => { setCreateError(null); setIsCreateOpen(true) }}>プロジェクトを追加</button></div>
+        {!isAccountLoaded || (account && !isWorkspaceLoaded) ? (
+          <div className="board-loading"><span /><p>ワークスペースを読み込んでいます…</p></div>
+        ) : selectedProject ? (
+          <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} />
+        ) : (
+          <div className="empty-workspace">
+            <span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9" /></Icon></span>
+            <h1>プロジェクトを作成しましょう</h1>
+            <p>サイドバーの追加ボタンから、最初のボードを作成できます。</p>
+            <button onClick={() => openDialog({ kind: 'create' })}>プロジェクトを追加</button>
+          </div>
         )}
       </main>
 
-      {isAccountLoaded && !nickname && (
-        <div className="modal-backdrop account-backdrop">
-          <div className="modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-registration-title">
-            <div className="account-symbol"><Icon size={28}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></Icon></div>
-            <div className="account-heading"><span className="eyebrow">WELCOME</span><h2 id="account-registration-title">アカウント登録</h2><p>はじめに、Team Todoで使用するニックネームを入力してください。</p></div>
-            <form onSubmit={registerAccount}>
-              <label>ニックネーム<input autoFocus maxLength={40} value={nicknameInput} onChange={(event) => setNicknameInput(event.target.value)} placeholder="例：山田" disabled={isRegistering} /></label>
-              <p className="account-hint">先頭の1文字がタスクのアサイン表示に使用されます。</p>
-              {registrationError && <p className="delete-error" role="alert">{registrationError}</p>}
-              <button type="submit" className="primary-button account-submit" disabled={!nicknameInput.trim() || isRegistering}>{isRegistering ? '登録中…' : '登録する'}</button>
-            </form>
-          </div>
-        </div>
-      )}
+      {isAccountLoaded && !account && <AccountRegistrationDialog initialError={accountError} onRegistered={applyAccount} />}
 
       {isSettingsOpen && (
-        <div className="modal-backdrop" onMouseDown={() => !isSavingSettings && setIsSettingsOpen(false)}><div className="modal user-settings-modal" role="dialog" aria-modal="true" aria-labelledby="user-settings-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><div><span className="eyebrow">USER SETTINGS</span><h2 id="user-settings-title">ユーザー設定</h2></div><button className="icon-button" aria-label="閉じる" onClick={() => setIsSettingsOpen(false)} disabled={isSavingSettings}>×</button></div><form onSubmit={saveUserSettings}><label>ユーザー名<input autoFocus maxLength={40} value={settingsNickname} onChange={(event) => setSettingsNickname(event.target.value)} disabled={isSavingSettings}/></label><fieldset className="color-settings"><legend>アイコンの背景色</legend><div className="color-preview"><span className="avatar" style={{ backgroundColor: settingsColor }}>{Array.from(settingsNickname.trim() || nickname)[0]?.toUpperCase() || '?'}</span><input type="color" aria-label="アイコンの背景色" value={settingsColor} onChange={(event) => setSettingsColor(event.target.value)} disabled={isSavingSettings}/><code>{settingsColor}</code></div></fieldset>{settingsError && <p className="delete-error" role="alert">{settingsError}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsSettingsOpen(false)} disabled={isSavingSettings}>キャンセル</button><button type="submit" className="primary-button" disabled={!settingsNickname.trim() || isSavingSettings}>{isSavingSettings ? '保存中…' : '保存'}</button></div></form></div></div>
+        <UserSettingsDialog
+          userId={userId}
+          nickname={nickname}
+          avatarColor={avatarColor}
+          onSaved={(user) => { applyAccount(user); setIsSettingsOpen(false) }}
+          onClose={() => setIsSettingsOpen(false)}
+        />
       )}
 
       {contextMenu && (
-        <div className="project-context-menu" role="menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 180), top: Math.min(contextMenu.y, window.innerHeight - (contextMenu.project.owner_id === userId ? 140 : 56)) }} onClick={(event) => event.stopPropagation()}>
-          {contextMenu.project.owner_id === userId ? <><button className="member-menu-item" role="menuitem" onClick={() => openMemberDialog(contextMenu.project, 'add')}><span aria-hidden="true">＋</span>メンバー追加</button><button className="member-menu-item" role="menuitem" onClick={() => openMemberDialog(contextMenu.project, 'remove')}><span aria-hidden="true">−</span>メンバー削除</button><button role="menuitem" onClick={() => openDeleteDialog(contextMenu.project)}><span aria-hidden="true">×</span>プロジェクト削除</button></> : <button role="menuitem" onClick={() => { setContextMenu(null); setProjectToLeave(contextMenu.project); setLeaveConfirmation(''); setDeleteError(null) }}><span aria-hidden="true">↩</span>脱退</button>}
+        <div
+          className="project-context-menu"
+          role="menu"
+          style={{ left: Math.min(contextMenu.x, window.innerWidth - 180), top: Math.min(contextMenu.y, window.innerHeight - (isOwnerMenu ? 140 : 56)) }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {isOwnerMenu ? (
+            <>
+              <button className="member-menu-item" role="menuitem" onClick={() => openDialog({ kind: 'members', project: contextMenu.project, mode: 'add' })}>
+                <span aria-hidden="true">＋</span>メンバー追加
+              </button>
+              <button className="member-menu-item" role="menuitem" onClick={() => openDialog({ kind: 'members', project: contextMenu.project, mode: 'remove' })}>
+                <span aria-hidden="true">−</span>メンバー削除
+              </button>
+              <button role="menuitem" onClick={() => openDialog({ kind: 'delete', project: contextMenu.project })}>
+                <span aria-hidden="true">×</span>プロジェクト削除
+              </button>
+            </>
+          ) : (
+            <button role="menuitem" onClick={() => openDialog({ kind: 'leave', project: contextMenu.project })}>
+              <span aria-hidden="true">↩</span>脱退
+            </button>
+          )}
         </div>
       )}
 
-      {notificationsChecked && notifications.length > 0 && (
-        <div className="modal-backdrop invitation-backdrop"><div className="modal invitation-modal" role="dialog" aria-modal="true" aria-labelledby="invitation-title"><span className="account-symbol"><Icon size={25}><path d="M5 12h14M12 5v14"/></Icon></span><h2 id="invitation-title">プロジェクトに追加されました</h2><ul>{notifications.map((item) => <li key={item.project_id}>「{item.project_name}」プロジェクトに追加されました。</li>)}</ul>{notificationError && <p className="delete-error" role="alert">{notificationError}</p>}<button className="primary-button invitation-ok" onClick={acknowledgeNotifications}>OK</button></div></div>
+      {isWorkspaceLoaded && notifications.length > 0 && (
+        <NoticeDialog
+          titleId="invitation-title"
+          title="プロジェクトに追加されました"
+          icon={<Icon size={25}><path d="M5 12h14M12 5v14" /></Icon>}
+          messages={notifications.map((item) => ({ key: item.project_id, text: `「${item.project_name}」プロジェクトに追加されました。` }))}
+          error={notificationError}
+          onAcknowledge={acknowledgeNotifications}
+        />
       )}
 
       {deletedProjectNotices.length > 0 && (
-        <div className="modal-backdrop invitation-backdrop"><div className="modal invitation-modal" role="dialog" aria-modal="true" aria-labelledby="project-deleted-title"><span className="account-symbol deleted-project-symbol"><Icon size={25}><path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/></Icon></span><h2 id="project-deleted-title">プロジェクトが削除されました</h2><ul>{deletedProjectNotices.map((item) => <li key={item.project_id}>「{item.project_name}」プロジェクトはオーナーによって削除されました。</li>)}</ul><button className="primary-button invitation-ok" onClick={() => setDeletedProjectNotices([])}>OK</button></div></div>
+        <NoticeDialog
+          titleId="project-deleted-title"
+          title="プロジェクトが削除されました"
+          icon={<Icon size={25}><path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12" /></Icon>}
+          symbolClassName="deleted-project-symbol"
+          messages={deletedProjectNotices.map((item) => ({ key: item.project_id, text: `「${item.project_name}」プロジェクトはオーナーによって削除されました。` }))}
+          onAcknowledge={() => setDeletedProjectNotices([])}
+        />
       )}
 
-      {memberDialog && (
-        <div className="modal-backdrop" onMouseDown={() => !isUpdatingMembers && setMemberDialog(null)}><div className="modal member-modal" role="dialog" aria-modal="true" aria-labelledby="member-dialog-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><div><span className={`eyebrow ${memberDialog.mode === 'remove' ? 'danger-eyebrow' : ''}`}>PROJECT MEMBERS</span><h2 id="member-dialog-title">メンバーを{memberDialog.mode === 'add' ? '追加' : '削除'}</h2><p>「{memberDialog.project.name}」</p></div><button className="icon-button" onClick={() => setMemberDialog(null)} disabled={isUpdatingMembers}>×</button></div><form onSubmit={updateMembers}><div className="member-selection" role="group" aria-label="メンバーリスト">{memberCandidates.length ? memberCandidates.map((user) => <label key={user.id}><input type="checkbox" checked={selectedMemberIds.includes(user.id)} onChange={() => toggleMember(user.id)}/><span className="member-avatar">{Array.from(user.nickname)[0]}</span><strong>{user.nickname}</strong></label>) : <p>選択できるメンバーはいません。</p>}</div>{memberDialog.mode === 'remove' && <><p className="delete-warning">選択したメンバーをプロジェクトから削除します。この操作を実行するには「削除」と入力してください。</p><label>確認入力<input value={memberConfirmation} onChange={(event) => setMemberConfirmation(event.target.value)} disabled={isUpdatingMembers}/></label></>}{memberError && <p className="delete-error" role="alert">{memberError}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setMemberDialog(null)} disabled={isUpdatingMembers}>キャンセル</button><button type="submit" className={memberDialog.mode === 'remove' ? 'danger-button' : 'primary-button'} disabled={!selectedMemberIds.length || isUpdatingMembers || (memberDialog.mode === 'remove' && memberConfirmation !== '削除')}>{isUpdatingMembers ? '処理中…' : '実行'}</button></div></form></div></div>
+      {dialog?.kind === 'create' && (
+        <CreateProjectDialog
+          onCreated={(created) => {
+            setProjects((items) => [...items, created])
+            setSelectedProjectId(created.id)
+            setDialog(null)
+          }}
+          onClose={() => setDialog(null)}
+        />
       )}
 
-      {isCreateOpen && (
-        <div className="modal-backdrop" onMouseDown={() => setIsCreateOpen(false)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="create-project-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header"><div><span className="eyebrow">NEW PROJECT</span><h2 id="create-project-title">プロジェクトを追加</h2></div><button className="icon-button" onClick={() => setIsCreateOpen(false)} aria-label="閉じる">×</button></div>
-            <form onSubmit={createProject}>
-              <label>プロジェクト名<input autoFocus value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="例：Webサイトリニューアル" /></label>
-              <p className="enter-hint">Enterキーでも作成できます</p>
-              {createError && <p className="delete-error" role="alert">{createError}</p>}
-              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : '決定'}</button></div>
-            </form>
-          </div>
-        </div>
+      {dialog?.kind === 'members' && <MemberDialog project={dialog.project} mode={dialog.mode} onClose={() => setDialog(null)} />}
+
+      {dialog?.kind === 'delete' && (
+        <ConfirmTextDialog
+          className="delete-project-modal"
+          eyebrow="DELETE PROJECT"
+          title={`「${dialog.project.name}」を削除`}
+          warning="この操作は取り消せません。プロジェクト内のタスクもすべて削除されます。"
+          confirmWord="削除"
+          busyLabel="削除中…"
+          errorMessage="プロジェクトを削除できませんでした。時間をおいてもう一度お試しください。"
+          onConfirm={() => deleteProject(dialog.project)}
+          onClose={() => setDialog(null)}
+        />
       )}
 
-
-      {projectToDelete && (
-        <div className="modal-backdrop" onMouseDown={closeDeleteDialog}>
-          <div className="modal delete-project-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header"><div><span className="eyebrow danger-eyebrow">DELETE PROJECT</span><h2 id="delete-project-title">「{projectToDelete.name}」を削除</h2></div><button className="icon-button" onClick={closeDeleteDialog} aria-label="閉じる" disabled={isDeleting}>×</button></div>
-            <form onSubmit={deleteProject}>
-              <p className="delete-warning">この操作は取り消せません。プロジェクト内のタスクもすべて削除されます。</p>
-              <label>確認のため「削除」と入力して実行ボタンを押してください。<input autoFocus value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} disabled={isDeleting} /></label>
-              {deleteError && <p className="delete-error" role="alert">{deleteError}</p>}
-              <div className="modal-actions"><button type="button" className="secondary-button" onClick={closeDeleteDialog} disabled={isDeleting}>キャンセル</button><button type="submit" className="danger-button" disabled={deleteConfirmation !== '削除' || isDeleting}>{isDeleting ? '削除中…' : '実行'}</button></div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {projectToLeave && (
-        <div className="modal-backdrop" onMouseDown={() => !isDeleting && setProjectToLeave(null)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="leave-project-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header"><div><span className="eyebrow danger-eyebrow">LEAVE PROJECT</span><h2 id="leave-project-title">「{projectToLeave.name}」から脱退</h2></div><button className="icon-button" onClick={() => setProjectToLeave(null)} disabled={isDeleting}>×</button></div>
-            <form onSubmit={leaveProject}><p className="delete-warning">プロジェクトから脱退しますか？再び参加するにはオーナーからの追加が必要です。</p><label>確認のため「脱退」と入力して実行ボタンを押してください。<input autoFocus value={leaveConfirmation} onChange={(event) => setLeaveConfirmation(event.target.value)} disabled={isDeleting}/></label>{deleteError && <p className="delete-error" role="alert">{deleteError}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setProjectToLeave(null)} disabled={isDeleting}>キャンセル</button><button type="submit" className="danger-button" disabled={leaveConfirmation !== '脱退' || isDeleting}>{isDeleting ? '処理中…' : '実行'}</button></div></form>
-          </div>
-        </div>
+      {dialog?.kind === 'leave' && (
+        <ConfirmTextDialog
+          eyebrow="LEAVE PROJECT"
+          title={`「${dialog.project.name}」から脱退`}
+          warning="プロジェクトから脱退しますか？再び参加するにはオーナーからの追加が必要です。"
+          confirmWord="脱退"
+          busyLabel="処理中…"
+          errorMessage="プロジェクトから脱退できませんでした。"
+          onConfirm={() => leaveProject(dialog.project)}
+          onClose={() => setDialog(null)}
+        />
       )}
     </div>
   )

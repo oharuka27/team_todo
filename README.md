@@ -2,308 +2,226 @@
 
 チームでToDoを共有できるリアルタイム更新対応のプロジェクト管理アプリです。
 
+- フロントエンド: https://team-todo.mitenecolab.com
+- バックエンド: https://team-todo-backend.mitenecolab.workers.dev
+
 ## 🎯 機能
 
-### フロントエンド
-- **プロジェクト管理**: オーナー／メンバープロジェクトの分類、作成・一覧表示・選択
+- **ログイン**: Clerk によるサインイン／サインアップ。初回ログイン時にニックネームを登録
+- **プロジェクト管理**: オーナー／メンバープロジェクトの分類、作成・名前変更・削除
 - **表示順変更**: オーナー／メンバーの各グループ内でドラッグ＆ドロップし、ユーザーごとの並び順を保存
 - **メンバー管理**: オーナーによるメンバー追加・削除、メンバー自身による脱退、初回招待通知
-- **リアルタイム通知**: Durable ObjectsとWebSocket Hibernationにより、変更時だけ接続中メンバーへ通知
+- **カンバンボード**: 4列（To Do / In Progress / In Review / Done）でタスクを管理。列名はダブルクリックで変更可能
+- **トピック**: プロジェクト内にトピックを作成し、トピック単位でタスクを整理（色の変更も可能）
+- **タスク詳細**: 説明・担当者・トピック・コメント
+- **検索とフィルター**: タスク名の検索、担当者での絞り込み
 - **ユーザー設定**: ユーザー名と担当者アイコンの背景色を変更
-- **削除通知**: オーナーがプロジェクトを削除すると、接続中メンバーへ操作を遮るポップアップを配信
-- **カンバンボード**: 3列レイアウト（未着手/着手中/完了）でToDoを管理
-- **トピック管理**: プロジェクト内にトピックを作成し、トピック単位でタスクを整理
-- **列のカスタマイズ**: 各列のタイトルをユーザーが編集可能
-- **ToDoの追加・削除**: リアルタイムな反映
-
-### バックエンド
-- **リアルタイム同期**: WebSocketによる複数ユーザーの同時接続対応
-- **API驚エンドポイント**: CRUD操作用のRESTful API
-- **CloudFlare Workers**: エッジでの実行による低レイテンシー
-- **データ永続化**: SQLiteによるデータ管理
+- **リアルタイム同期**: Durable Objects と WebSocket Hibernation により、変更時だけ接続中のメンバーへ通知。プロジェクトが削除されたときは、操作を遮るポップアップで通知
 
 ## 📁 プロジェクト構成
 
 ```
 team_todo/
-├── frontend/                    # React + TypeScript + Vite
+├── frontend/                        # React + TypeScript + Vite
+│   └── src/
+│       ├── main.tsx                 # エントリーポイント（ClerkProvider）
+│       ├── App.tsx                  # 認証ゲートとワークスペース（サイドバー・各ダイアログの切り替え）
+│       ├── pages/ProjectPage.tsx    # カンバンボード・トピック画面
+│       ├── components/              # 画面部品（ダイアログ、カンバン列、タスクカード、トピック など）
+│       ├── hooks/useRealtimeSocket.ts # WebSocket の接続と自動再接続
+│       ├── services/api.ts          # APIクライアント（Clerkトークンを付与）
+│       └── utils/avatar.ts          # アバター表示の共通処理
+├── backend/                         # Cloudflare Workers + Hono + D1
 │   ├── src/
-│   │   ├── pages/              # ページコンポーネント
-│   │   │   ├── HomePage.tsx    # プロジェクト一覧・作成
-│   │   │   └── ProjectPage.tsx # カンバンボード
-│   │   ├── styles/             # CSSファイル
-│   │   ├── App.tsx             # メインコンポーネント
-│   │   └── main.tsx            # エントリーポイント
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── vite.config.ts
-├── backend/                     # CloudFlare Workers + Hono
-│   ├── src/
-│   │   └── index.ts            # バックエンド実装
-│   ├── migrations/
-│   │   └── 0001_create_todos.sql
-│   ├── package.json
+│   │   ├── index.ts                 # API・認証・Durable Object（RealtimeChannel）
+│   │   ├── index.test.ts            # API のテスト
+│   │   ├── migrations.test.ts       # マイグレーションのテスト
+│   │   └── test/d1.ts               # テスト用 D1（SQLite + 全マイグレーション適用）
+│   ├── migrations/                  # D1 マイグレーション（0001〜）
 │   └── wrangler.jsonc
-└── README.md
+├── setup.sh                         # frontend / backend の依存パッケージをまとめてインストール
+└── .github/workflows/               # CI（型チェック・lint・ユニットテスト・結果メール）
 ```
 
 ## 🚀 セットアップ
 
 ### 前提条件
-- Node.js 18以上
-- npm または pnpm
+- Node.js 22 以上（CI と同じバージョン）
+- npm
+
+`./setup.sh` で frontend / backend の依存パッケージをまとめてインストールできます。
 
 ### 認証（Clerk）
 
 ログインには [Clerk](https://clerk.com/) を使用します。Clerk ダッシュボードでアプリケーションを作成し、APIキーを設定してください。
 
-`frontend/.env.local`:
+`frontend/.env.local`（Git管理外）:
 
 ```
+VITE_API_URL=http://localhost:8787
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 ```
 
-`backend/.dev.vars`（ローカル開発用。Git管理外）:
+`backend/.dev.vars`（Git管理外）:
 
 ```
 CLERK_SECRET_KEY=sk_test_...
 CLERK_AUTHORIZED_PARTIES=http://localhost:5173
 ```
 
-本番環境では `wrangler secret put CLERK_SECRET_KEY` でシークレットを登録し、`CLERK_AUTHORIZED_PARTIES` にフロントエンドのオリジンを設定します。
+- `CLERK_AUTHORIZED_PARTIES` はフロントエンドのオリジン（カンマ区切り）です。Clerk トークンの発行元チェックと CORS の許可リストの両方に使います。
+- ローカルでは `http://localhost:5173` で開いてください（`127.0.0.1` では CORS で拒否されます）。
 
-APIはすべて `Authorization: Bearer <Clerkセッショントークン>` を必要とし、操作ユーザーはトークンから判定します。WebSocketはヘッダーを送れないため、`?token=` クエリでトークンを渡します。
-
-### フロントエンド
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-開発サーバーは `http://localhost:5173` で起動します。
-
-### フロントエンドテスト
+### 起動
 
 ```bash
-cd frontend
-npm test
+# ターミナル1: バックエンド（ローカルD1のマイグレーションも実行）
+cd backend && npm run dev     # http://localhost:8787
+
+# ターミナル2: フロントエンド
+cd frontend && npm run dev    # http://localhost:5173
 ```
 
-開発中にテストを監視実行する場合は `npm run test:watch` を使用します。
-
-### バックエンドテスト
+### テスト・型チェック・lint
 
 ```bash
-cd backend
-npm test
+cd frontend && npm test && npm run typecheck && npm run lint
+cd backend && npm test && npm run typecheck
 ```
 
-### テスト結果のメール通知
+- 開発中にテストを監視実行する場合は `npm run test:watch` を使用します。
+- バックエンドのテストは、Node.js 組み込みの SQLite（`node:sqlite`）に `migrations/` をすべて適用したデータベースで実行します。実際の SQL とマイグレーションがそのまま検証されます。
+- 依存パッケージを追加・更新するときは、CI と同じ npm 10 系で lock ファイルを更新してください（`npx npm@10 install`）。npm 11 で更新すると、CI の `npm ci` が失敗することがあります。
 
-GitHub Actionsは、push時にfrontend/backendのテスト件数と結果をメール送信します。リポジトリの `Settings` → `Secrets and variables` → `Actions` で、次のRepository secretsを設定してください。
+## 🔐 認証と権限
 
-- `MAIL_USERNAME`: 送信元のGmailアドレス
-- `MAIL_PASSWORD`: Googleアカウントで発行したアプリパスワード
-
-通常のGoogleアカウントパスワードは登録しないでください。メールは `xxx@gmail.com` 宛てに送信されます。
-
-### バックエンド
-
-```bash
-cd backend
-npm install
-npm run dev
-```
-
-デバッグサーバーは `http://localhost:8787` で起動します。
-
-## 📝 使用方法
-
-### プロジェクト作成
-1. ホームページのフォームでプロジェクト名を入力
-2. 「作成」ボタンをクリック
-3. プロジェクトが一覧に追加される
-
-### ToDoの管理
-1. プロジェクトをクリックして詳細ページに移動
-2. 各列に新しいToDoを追加
-3. ToDoをドラッグして別の列に移動
-4. ✏️ボタンで列のタイトルを編集
-
-### リアルタイム同期
-- プロジェクトごとのDurable ObjectがWebSocket接続を管理します
-- D1の更新成功時だけ、接続中のプロジェクトメンバーへ変更イベントを配信します
-- WebSocket Hibernation APIにより、通信がない間は接続を維持したままDurable Objectを休止します
-- 切断時のみ5秒後に再接続し、定期ポーリングは行いません
+- API（`/api/*`）はすべて `Authorization: Bearer <Clerkセッショントークン>` が必要です。操作ユーザーはトークンから判定し、リクエストの `user_id` などは信用しません。
+- WebSocket はヘッダーを送れないため、`?token=` クエリでトークンを渡します。
+- プロジェクト配下のデータ（タスク・列・トピック・コメント・メンバー）は、そのプロジェクトのオーナーまたはメンバーだけが操作できます。
+- プロジェクトの名前変更・削除とメンバーの追加・削除はオーナーだけが行えます。
 
 ## 🔧 API エンドポイント
 
-### ユーザーAPI
+### ユーザー
 
 ```
-POST   /api/users                 # ログイン中ユーザーのニックネームを登録
-GET    /api/users/me              # ログイン中ユーザーの情報取得（未登録なら404）
-GET    /api/users                 # ユーザー一覧取得
-GET    /api/users/:id/project-notifications # 未確認のプロジェクト招待通知
-POST   /api/users/:id/project-notifications/acknowledge # 招待通知を確認済みにする
+POST   /api/users                                        # ログイン中ユーザーのニックネームを登録
+GET    /api/users/me                                     # ログイン中ユーザーの情報（未登録なら404）
+GET    /api/users                                        # ユーザー一覧（メンバー追加の候補）
+PUT    /api/users/:id                                    # ユーザー名・アイコン色の変更（本人のみ）
+PUT    /api/users/:id/project-order                      # プロジェクトの表示順を保存（本人のみ）
+GET    /api/users/:id/project-notifications              # 未確認の招待通知（本人のみ）
+POST   /api/users/:id/project-notifications/acknowledge  # 招待通知を確認済みにする（本人のみ）
 ```
 
-### プロジェクトAPI
+### プロジェクト・メンバー
 
 ```
-POST   /api/projects              # プロジェクト作成
-GET    /api/projects              # プロジェクト一覧取得
-GET    /api/projects/:id          # プロジェクト詳細取得
-PUT    /api/projects/:id          # プロジェクト更新
-DELETE /api/projects/:id          # プロジェクト削除
-GET    /api/projects/:id/topics   # トピック一覧取得
-POST   /api/projects/:id/topics   # トピック作成
-GET    /api/projects/:id/members  # プロジェクトメンバー一覧
-POST   /api/projects/:id/members  # メンバー追加（オーナーのみ）
-DELETE /api/projects/:id/members/:userId # メンバー削除（オーナーのみ）
-POST   /api/projects/:id/leave    # メンバープロジェクトから脱退
-GET    /api/realtime/users/:userId       # ユーザー通知WebSocket
-GET    /api/realtime/projects/:projectId # プロジェクト更新WebSocket
+POST   /api/projects                           # プロジェクト作成（標準の4列も作成）
+GET    /api/projects                           # 自分がオーナー／メンバーのプロジェクト一覧
+GET    /api/projects/:id                       # プロジェクト詳細
+PUT    /api/projects/:id                       # プロジェクト更新（オーナーのみ）
+DELETE /api/projects/:id                       # プロジェクト削除（オーナーのみ）
+GET    /api/projects/:id/members               # メンバー一覧
+POST   /api/projects/:id/members               # メンバー追加（オーナーのみ）
+DELETE /api/projects/:id/members/:userId       # メンバー削除（オーナーのみ）
+POST   /api/projects/:id/leave                 # メンバープロジェクトから脱退
 ```
 
-### ToDoAPI
+### 列・トピック
 
 ```
-POST   /api/todos                 # ToDoアイテム作成
-GET    /api/projects/:id/todos    # プロジェクトのToDoリスト取得
-PUT    /api/todos/:id             # ToDoアイテム更新
-DELETE /api/todos/:id             # ToDoアイテム削除
-GET    /api/todos/:id/comments    # コメント一覧取得
-POST   /api/todos/:id/comments    # コメント追加
+GET    /api/projects/:id/columns               # 列一覧
+PUT    /api/columns/:id                        # 列のタイトル変更
+GET    /api/projects/:id/topics                # トピック一覧
+POST   /api/projects/:id/topics                # トピック作成
+PUT    /api/topics/:id                         # トピックの色変更
 ```
 
-### カラムAPI
+### タスク・コメント
 
 ```
-GET    /api/projects/:id/columns  # プロジェクトの列一覧取得
-PUT    /api/columns/:id           # 列のタイトル更新
+POST   /api/todos                              # タスク作成（column_id が必要）
+GET    /api/projects/:id/todos                 # プロジェクトのタスク一覧
+PUT    /api/todos/:id                          # タスク更新（タイトル・説明・列・担当者・トピック）
+DELETE /api/todos/:id                          # タスク削除（コメントも削除）
+GET    /api/todos/:id/comments                 # コメント一覧
+POST   /api/todos/:id/comments                 # コメント追加
 ```
 
-## 🗄️ データベーススキーマ
+### リアルタイム（WebSocket）
 
-### users テーブル
-- `id`: ユーザーID（主キー）
-- `nickname`: ニックネーム
-- `created_at`: 作成日時
-- `updated_at`: 更新日時
+```
+GET    /api/realtime/users/:userId             # ユーザー宛ての通知（招待・プロジェクト削除など）
+GET    /api/realtime/projects/:projectId       # プロジェクト内の変更通知
+```
 
-### projects テーブル
-- `id`: プロジェクトID（主キー）
-- `name`: プロジェクト名
-- `description`: 説明
-- `owner_id`: オーナーユーザーID
-- `created_at`: 作成日時
-- `updated_at`: 更新日時
+## 🗄️ データベーススキーマ（D1）
 
-### project_members テーブル
-- `project_id`: プロジェクトID
-- `user_id`: ユーザーID
-- `role`: `owner` または `member`
-- `created_at`: 追加日時
-- `notified_at`: 招待通知の確認日時（未確認の場合はNULL）
+| テーブル | 主な列 |
+|---|---|
+| `users` | `id`（Clerk ユーザーID）, `nickname`, `avatar_color`, `created_at`, `updated_at` |
+| `projects` | `id`, `name`, `description`, `owner_id`, `created_at`, `updated_at` |
+| `project_members` | `project_id`, `user_id`, `role`（`owner` / `member`）, `sort_order`（ユーザーごとの表示順）, `notified_at`（招待通知の確認日時）, `created_at` |
+| `board_columns` | `id`, `project_id`, `title`, `position`, `created_at`, `updated_at` |
+| `topics` | `id`, `project_id`, `name`, `color`, `created_at`, `updated_at` |
+| `todos` | `id`, `project_id`, `column_id`, `column_name`（表示用のコピー）, `topic_id`, `title`, `description`, `status`（未使用）, `user_id`（作成者）, `assignee_id`, `created_at`, `updated_at` |
+| `todo_comments` | `id`, `todo_id`, `user_id`, `body`, `created_at` |
 
-### todos テーブル
-- `id`: ToDoアイテムID（主キー）
-- `project_id`: プロジェクトID（外部キー）
-- `topic_id`: 所属トピックID（未設定の場合はNULL）
-- `title`: タイトル
-- `description`: 説明
-- `status`: ステータス
-- `column_name`: 列の名前
-- `user_id`: 作成ユーザーID
-- `assignee_id`: 担当ユーザーID
-- `created_at`: 作成日時
-- `updated_at`: 更新日時
+スキーマの変更は `backend/migrations/` に連番の SQL を追加します。`npm run dev` / `npm run deploy` の実行時に自動で適用されます。
 
-### todo_comments テーブル
-- `id`: コメントID（主キー）
-- `todo_id`: 対象タスクID
-- `user_id`: コメント投稿者ID
-- `body`: コメント本文
-- `created_at`: 作成日時
+## 🚢 デプロイ
 
-### topics テーブル
-- `id`: トピックID（主キー）
-- `project_id`: プロジェクトID
-- `name`: トピック名
-- `created_at`: 作成日時
-- `updated_at`: 更新日時
-
-### board_columns テーブル
-- `id`: 列ID（主キー）
-- `project_id`: プロジェクトID（外部キー）
-- `title`: 列のタイトル
-- `position`: 表示位置
-- `created_at`: 作成日時
-- `updated_at`: 更新日時
-
-## 🚢 CloudFlareへのデプロイ
+### バックエンド（Cloudflare Workers）
 
 ```bash
 cd backend
-npm run deploy
+npm run deploy   # 本番D1へのマイグレーション適用 → Worker のデプロイ
 ```
 
-フロントエンドは CloudFlare Pages や Vercel などにデプロイできます。
+初回のみ、本番用の Clerk シークレットを登録します。
 
 ```bash
-cd frontend
-npm run build
-# 生成された dist ディレクトリをデプロイ
+npx wrangler secret put CLERK_SECRET_KEY --env=""   # sk_live_...
 ```
 
-## 🤝 マルチユーザー対応
+`CLERK_AUTHORIZED_PARTIES` は `wrangler.jsonc` の `vars` で管理しています。
 
-- WebSocket接続によるリアルタイム同期
-- 複数ユーザーの同時編集に対応
-- ユーザーIDはClerkのユーザーIDを使用し、初回ログイン時にニックネームを登録
+### フロントエンド（Cloudflare Workers Builds）
 
-## 📦 依存パッケージ
+`main` への push で Cloudflare が `/frontend` を自動ビルド・デプロイします。ビルド変数（Build variables）に次を設定しています。
 
-### フロントエンド
-- React 18+
-- TypeScript 5+
-- Vite 5+
+- `VITE_API_URL`: バックエンドの URL
+- `VITE_CLERK_PUBLISHABLE_KEY`: 本番用の `pk_live_...`
 
-### バックエンド
-- Hono 4+
-- @hono/cors
-- uuid
-- Wrangler 3+ (CloudFlare Workers CLI)
+スキーマ変更を含む場合は、バックエンドを先にデプロイしてからフロントエンドを push してください。
+
+## 📬 CI（GitHub Actions）
+
+push と pull request のたびに、frontend / backend の型チェック・lint・ユニットテストを実行します。`main` への push では、結果をメールで送信します。リポジトリの `Settings` → `Secrets and variables` → `Actions` で、次の Repository secrets を設定してください。
+
+- `MAIL_USERNAME`: 送信元の Gmail アドレス
+- `MAIL_PASSWORD`: Google アカウントで発行したアプリパスワード（通常のパスワードは登録しない）
+- `MAIL_TO`: 通知の送信先メールアドレス
+
+## 📦 主な依存パッケージ
+
+- フロントエンド: React 19, TypeScript, Vite 8, `@clerk/react`, Vitest, Testing Library, oxlint
+- バックエンド: Hono 4, `@clerk/backend`, Wrangler 4, Vitest
+
+## 🐛 トラブルシューティング
+
+- **「読み込んでいます…」のまま進まない**: Clerk の初期化に失敗しています。`VITE_CLERK_PUBLISHABLE_KEY` を確認してください。本番では `clerk.mitenecolab.com` の DNS と SSL が有効である必要があります。
+- **ログイン後に API が 401 になる**: バックエンドの `CLERK_SECRET_KEY` が、フロントのキーと同じ Clerk インスタンス（開発／本番）の `sk_...` か確認してください。
+- **API が CORS で失敗する**: フロントのオリジンが `CLERK_AUTHORIZED_PARTIES` に含まれているか確認してください。
+- **CI の `npm ci` が lock ファイルの不一致で失敗する**: lock ファイルを npm 10 系で更新し直してください（`npx npm@10 install`）。
+
+## 📚 参考資料
+
+- [Vite](https://vite.dev/) / [React](https://react.dev/) / [Hono](https://hono.dev/)
+- [Cloudflare Workers](https://developers.cloudflare.com/workers/) / [D1](https://developers.cloudflare.com/d1/)
+- [Clerk](https://clerk.com/docs)
 
 ## 📄 ライセンス
 
 MIT License
-
-## 🐛 トラブルシューティング
-
-### フロントエンドが起動しない
-```bash
-cd frontend
-rm -rf node_modules package-lock.json
-npm install
-npm run dev
-```
-
-### バックエンド接続エラー
-- CloudFlareにデプロイしていない場合、バックエンドはモック データを使用します
-- 本番環境では環境変数を設定して、実際のバックエンドURLを指定します
-
-## 📚 参考資料
-
-- [Vite](https://vite.dev/)
-- [React](https://react.dev/)
-- [Hono](https://hono.dev/)
-- [CloudFlare Workers](https://workers.cloudflare.com/)
-- [SQLite](https://www.sqlite.org/)
-
----
-
-**開発版**: このアプリは現在開発中です。新機能や改善が随時追加されます。

@@ -22,6 +22,8 @@ vi.mock('../services/api', () => ({
     addProjectMember: vi.fn(),
     getTodoComments: vi.fn(),
     createTodoComment: vi.fn(),
+    connectProjectEvents: vi.fn(),
+    getProject: vi.fn(),
   },
 }))
 
@@ -44,6 +46,8 @@ const todo = (id: string, title: string, columnName = 'To Do'): TodoItem => ({
   updated_at: now,
 })
 
+let projectSocket: WebSocket
+
 describe('ProjectPage', () => {
   const onProjectUpdated = vi.fn()
 
@@ -54,6 +58,10 @@ describe('ProjectPage', () => {
     mockedApi.getUsers.mockResolvedValue([])
     mockedApi.getProjectMembers.mockResolvedValue([])
     mockedApi.getTodoComments.mockResolvedValue([])
+    mockedApi.connectProjectEvents.mockImplementation(async () => {
+      projectSocket = { onmessage: null, onclose: null, onerror: null, close: vi.fn() } as unknown as WebSocket
+      return projectSocket
+    })
   })
 
   it('実際のプロジェクトメンバーを表示し、追加ボタンから新しいメンバーを追加する', async () => {
@@ -392,5 +400,17 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('button', { name: '追加' }))
 
     await waitFor(() => expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'todo-column', undefined, null))
+  })
+
+  it('リアルタイム通知を受け取るとボードを再読み込みする', async () => {
+    mockedApi.getTodos.mockResolvedValue([todo('todo-1', '既存タスク')])
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+    await screen.findByText('既存タスク')
+    await waitFor(() => expect(mockedApi.connectProjectEvents).toHaveBeenCalledWith(project.id))
+
+    mockedApi.getTodos.mockResolvedValue([todo('todo-1', '既存タスク'), todo('todo-2', '他のメンバーが追加')])
+    projectSocket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'todo.created', project_id: project.id }) }))
+
+    expect(await screen.findByText('他のメンバーが追加')).toBeInTheDocument()
   })
 })

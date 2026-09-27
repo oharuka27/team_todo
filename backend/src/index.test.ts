@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import app from './index'
+import { TestD1 } from './test/d1'
 
 // Tests use the Clerk user ID itself as the session token; 'invalid' simulates a rejected token.
 vi.mock('@clerk/backend', () => ({
@@ -8,203 +9,6 @@ vi.mock('@clerk/backend', () => ({
     return { sub: token }
   }),
 }))
-
-type Row = Record<string, unknown>
-
-class MemoryStatement {
-  private params: unknown[] = []
-
-  constructor(private readonly database: MemoryD1, private readonly sql: string) {}
-
-  bind(...params: unknown[]) {
-    this.params = params
-    return this
-  }
-
-  async first<T>() {
-    return (this.database.first(this.sql, this.params) ?? null) as T | null
-  }
-
-  async all<T>() {
-    return { results: this.database.all(this.sql, this.params) as T[] }
-  }
-
-  async run() {
-    return { meta: { changes: this.database.run(this.sql, this.params) } }
-  }
-}
-
-class MemoryD1 {
-  users: Row[] = []
-  projects: Row[] = []
-  members: Row[] = []
-  columns: Row[] = []
-  topics: Row[] = []
-  todos: Row[] = []
-  comments: Row[] = []
-
-  prepare(sql: string) {
-    return new MemoryStatement(this, sql)
-  }
-
-  async batch(statements: MemoryStatement[]) {
-    return Promise.all(statements.map((statement) => statement.run()))
-  }
-
-  first(sql: string, params: unknown[]) {
-    if (sql.includes('MAX(sort_order)')) {
-      const role = sql.includes("role = 'owner'") ? 'owner' : 'member'
-      const orders = this.members.filter((row) => row.user_id === params[0] && row.role === role).map((row) => Number(row.sort_order ?? 0))
-      return { next_order: orders.length ? Math.max(...orders) + 1 : 0 }
-    }
-    if (sql.includes('FROM users WHERE id')) return this.users.find((row) => row.id === params[0])
-    if (sql.includes('SELECT id FROM projects')) {
-      const row = this.projects.find((item) => item.id === params[0])
-      return row ? { id: row.id } : undefined
-    }
-    if (sql.includes('FROM projects WHERE id')) return this.projects.find((row) => row.id === params[0])
-    if (sql.includes('FROM board_columns WHERE project_id = ? AND title = ?')) return this.columns.find((row) => row.project_id === params[0] && row.title === params[1])
-    if (sql.includes('FROM board_columns WHERE id')) return this.columns.find((row) => row.id === params[0])
-    if (sql.includes('FROM topics WHERE id')) return this.topics.find((row) => row.id === params[0])
-    if (sql.includes('FROM todos WHERE id')) return this.todos.find((row) => row.id === params[0])
-    if (sql.includes('FROM project_members WHERE project_id')) return this.members.find((row) => row.project_id === params[0] && row.user_id === params[1])
-    return undefined
-  }
-
-  all(sql: string, params: unknown[]) {
-    if (sql.includes('SELECT * FROM users ORDER BY')) return [...this.users].sort((a, b) => String(a.nickname).localeCompare(String(b.nickname)))
-    if (sql.includes('FROM project_members pm JOIN projects p')) return this.members.filter((member) => member.user_id === params[0] && member.role === 'member' && member.notified_at == null).map((member) => ({ project_id: member.project_id, project_name: this.projects.find((project) => project.id === member.project_id)?.name }))
-    if (sql.includes('FROM project_members pm JOIN users u')) return this.members.filter((member) => member.project_id === params[0]).map((member) => {
-      const user = this.users.find((candidate) => candidate.id === member.user_id)
-      return { ...member, nickname: user?.nickname, avatar_color: user?.avatar_color }
-    })
-    if (sql.includes("SELECT user_id FROM project_members") && sql.includes("role = 'member'")) return this.members.filter((member) => member.project_id === params[0] && member.role === 'member').map((member) => ({ user_id: member.user_id }))
-    if (sql.includes('SELECT project_id FROM project_members')) return this.members.filter((member) => member.user_id === params[0]).map((member) => ({ project_id: member.project_id }))
-    if (sql.includes('FROM projects WHERE owner_id')) return this.projects.filter((project) => project.owner_id === params[0])
-    if (sql.includes('FROM projects p JOIN project_members pm')) return this.members.filter((member) => member.user_id === params[0]).map((member) => this.projects.find((project) => project.id === member.project_id)).filter((project) => project && (sql.includes('p.owner_id <> ?') ? project.owner_id !== params[1] : project.owner_id === params[1]))
-    if (sql.includes('FROM todo_comments c')) return this.comments.filter((row) => row.todo_id === params[0]).map((comment) => ({ ...comment, nickname: this.users.find((user) => user.id === comment.user_id)?.nickname ?? null }))
-    if (sql.includes('SELECT DISTINCT p.* FROM projects')) {
-      return this.projects.filter((project) => project.owner_id === params[0] || this.members.some((member) => member.project_id === project.id && member.user_id === params[1]))
-    }
-    if (sql.includes('FROM board_columns WHERE project_id')) return this.columns.filter((row) => row.project_id === params[0]).sort((a, b) => Number(a.position) - Number(b.position))
-    if (sql.includes('FROM topics WHERE project_id')) return this.topics.filter((row) => row.project_id === params[0])
-    if (sql.includes('FROM todos WHERE project_id')) return this.todos.filter((row) => row.project_id === params[0])
-    return []
-  }
-
-  run(sql: string, params: unknown[]) {
-    if (sql.startsWith('INSERT INTO users')) {
-      this.users.push({ id: params[0], nickname: params[1], avatar_color: params[2], created_at: params[3], updated_at: params[4] })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO projects')) {
-      this.projects.push({ id: params[0], name: params[1], description: params[2], owner_id: params[3], created_at: params[4], updated_at: params[5] })
-      return 1
-    }
-    if (sql.startsWith('INSERT OR IGNORE INTO project_members')) {
-      if (this.members.some((member) => member.project_id === params[0] && member.user_id === params[1])) return 0
-      this.members.push({ project_id: params[0], user_id: params[1], role: 'owner', created_at: params[2], notified_at: params[3], sort_order: params[4] })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO project_members')) {
-      const role = sql.includes("'member'") ? 'member' : 'owner'
-      const orders = this.members.filter((row) => row.user_id === params[3] && row.role === role).map((row) => Number(row.sort_order ?? 0))
-      this.members.push({ project_id: params[0], user_id: params[1], role, created_at: params[2], notified_at: role === 'member' ? null : params[2], sort_order: orders.length ? Math.max(...orders) + 1 : 0 })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO board_columns')) {
-      this.columns.push({ id: params[0], project_id: params[1], title: params[2], position: params[3], created_at: params[4], updated_at: params[5] })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO todos')) {
-      this.todos.push({ id: params[0], project_id: params[1], topic_id: params[2], title: params[3], description: params[4], status: params[5], column_id: params[6], column_name: params[7], user_id: params[8], assignee_id: params[9], created_at: params[10], updated_at: params[11] })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO topics')) {
-      this.topics.push({ id: params[0], project_id: params[1], name: params[2], color: params[3], created_at: params[4], updated_at: params[5] })
-      return 1
-    }
-    if (sql.startsWith('INSERT INTO todo_comments')) {
-      this.comments.push({ id: params[0], todo_id: params[1], user_id: params[2], body: params[3], created_at: params[4] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE todos SET title')) {
-      const todo = this.todos.find((row) => row.id === params[8])
-      if (!todo) return 0
-      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_id: params[3], column_name: params[4], assignee_id: params[5], topic_id: params[6], updated_at: params[7] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE board_columns SET title')) {
-      const column = this.columns.find((row) => row.id === params[2])
-      if (!column) return 0
-      Object.assign(column, { title: params[0], updated_at: params[1] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE todos SET column_name')) {
-      const todos = this.todos.filter((row) => row.column_id === params[2])
-      todos.forEach((todo) => Object.assign(todo, { column_name: params[0], updated_at: params[1] }))
-      return todos.length
-    }
-    if (sql.startsWith('UPDATE users SET nickname')) {
-      const user = this.users.find((row) => row.id === params[3])
-      if (!user) return 0
-      Object.assign(user, { nickname: params[0], avatar_color: params[1], updated_at: params[2] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE topics SET color')) {
-      const topic = this.topics.find((row) => row.id === params[2])
-      if (!topic) return 0
-      Object.assign(topic, { color: params[0], updated_at: params[1] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE projects SET name')) {
-      const project = this.projects.find((row) => row.id === params[3])
-      if (!project) return 0
-      Object.assign(project, { name: params[0], description: params[1], updated_at: params[2] })
-      return 1
-    }
-    if (sql.startsWith('UPDATE project_members SET notified_at')) {
-      const member = this.members.find((row) => row.project_id === params[1] && row.user_id === params[2] && row.role === 'member')
-      if (!member) return 0
-      member.notified_at = params[0]
-      return 1
-    }
-    if (sql.startsWith('UPDATE project_members SET sort_order')) {
-      const member = this.members.find((row) => row.project_id === params[1] && row.user_id === params[2])
-      if (!member) return 0
-      member.sort_order = params[0]
-      return 1
-    }
-    if (sql.startsWith('DELETE FROM todos WHERE id')) return this.remove(this.todos, 'id', params[0])
-    if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id IN')) {
-      const todoIds = new Set(this.todos.filter((todo) => todo.project_id === params[0]).map((todo) => todo.id))
-      const previousLength = this.comments.length
-      const remaining = this.comments.filter((comment) => !todoIds.has(comment.todo_id))
-      this.comments.splice(0, this.comments.length, ...remaining)
-      return previousLength - this.comments.length
-    }
-    if (sql.startsWith('DELETE FROM todo_comments WHERE todo_id')) return this.remove(this.comments, 'todo_id', params[0])
-    if (sql.startsWith('DELETE FROM todos WHERE project_id')) return this.remove(this.todos, 'project_id', params[0])
-    if (sql.startsWith('DELETE FROM board_columns WHERE project_id')) return this.remove(this.columns, 'project_id', params[0])
-    if (sql.startsWith('DELETE FROM topics WHERE project_id')) return this.remove(this.topics, 'project_id', params[0])
-    if (sql.includes("DELETE FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'member'")) {
-      const previousLength = this.members.length
-      const remaining = this.members.filter((member) => !(member.project_id === params[0] && member.user_id === params[1] && member.role === 'member'))
-      this.members.splice(0, this.members.length, ...remaining)
-      return previousLength - this.members.length
-    }
-    if (sql.startsWith('DELETE FROM project_members WHERE project_id')) return this.remove(this.members, 'project_id', params[0])
-    if (sql.startsWith('DELETE FROM projects WHERE id')) return this.remove(this.projects, 'id', params[0])
-    return 0
-  }
-
-  private remove(rows: Row[], key: string, value: unknown) {
-    const previousLength = rows.length
-    const remaining = rows.filter((row) => row[key] !== value)
-    rows.splice(0, rows.length, ...remaining)
-    return previousLength - rows.length
-  }
-}
 
 class MemoryRealtime {
   messages: Array<{ channel: string; event: { type: string; project_id?: string; user_id?: string } }> = []
@@ -228,7 +32,7 @@ const jsonRequest = (body: unknown, method = 'POST', userId = 'user-1'): Request
 const request = (method = 'GET', userId = 'user-1'): RequestInit => ({ method, headers: auth(userId) })
 
 describe('Team Todo API', () => {
-  let database: MemoryD1
+  let database: TestD1
   let realtime: MemoryRealtime
   let environment: { DB: D1Database; ENVIRONMENT: string; REALTIME: DurableObjectNamespace; CLERK_SECRET_KEY: string }
 
@@ -238,7 +42,7 @@ describe('Team Todo API', () => {
   }
 
   beforeEach(() => {
-    database = new MemoryD1()
+    database = new TestD1()
     realtime = new MemoryRealtime()
     environment = { DB: database as unknown as D1Database, ENVIRONMENT: 'test', REALTIME: realtime as unknown as DurableObjectNamespace, CLERK_SECRET_KEY: 'sk_test' }
   })
@@ -259,7 +63,7 @@ describe('Team Todo API', () => {
 
   it('ログイン中のユーザー情報を取得し、未登録なら404を返す', async () => {
     expect((await app.request('/api/users/me', request(), environment)).status).toBe(404)
-    database.users.push({ id: 'user-1', nickname: '山田' })
+    database.seedUser('user-1', '山田')
 
     const response = await app.request('/api/users/me', request(), environment)
     expect(response.status).toBe(200)
@@ -283,7 +87,7 @@ describe('Team Todo API', () => {
   })
 
   it('他のユーザーの設定変更や通知の取得を拒否する', async () => {
-    database.users.push({ id: 'user-1', nickname: '山田' })
+    database.seedUser('user-1', '山田')
 
     expect((await app.request('/api/users/user-1', jsonRequest({ user_id: 'user-1', nickname: '乗っ取り', avatar_color: '#336699' }, 'PUT', 'attacker'), environment)).status).toBe(403)
     expect((await app.request('/api/users/user-1/project-notifications', request('GET', 'attacker'), environment)).status).toBe(403)
@@ -319,7 +123,8 @@ describe('Team Todo API', () => {
     const secondResponse = await app.request('/api/projects', jsonRequest({ name: '二番目' }), environment)
     const first = await firstResponse.json() as { id: string }
     const second = await secondResponse.json() as { id: string }
-    database.members.splice(database.members.findIndex((member) => member.project_id === first.id), 1)
+    // Simulate a project created before owners had a project_members row (migration 0006).
+    database.execute('DELETE FROM project_members WHERE project_id = ?', first.id)
 
     const response = await app.request('/api/users/user-1/project-order', jsonRequest({ group: 'owner', project_ids: [second.id, first.id] }, 'PUT'), environment)
 
@@ -377,7 +182,8 @@ describe('Team Todo API', () => {
   })
 
   it('タスクの説明・担当者・コメントを保存する', async () => {
-    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'user-2', nickname: '佐藤' })
+    database.seedUser('user-1', '山田')
+    database.seedUser('user-2', '佐藤')
     const project = await createProject()
     await app.request(`/api/projects/${project.id}/members`, jsonRequest({ user_id: 'user-2' }), environment)
     const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '詳細タスク', column_name: 'To Do' }), environment)
@@ -395,13 +201,14 @@ describe('Team Todo API', () => {
   })
 
   it('メンバー以外によるプロジェクト配下のデータの閲覧・変更を拒否する', async () => {
-    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'outsider', nickname: '部外者' })
+    database.seedUser('user-1', '山田')
+    database.seedUser('outsider', '部外者')
     const project = await createProject()
     const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '機密タスク', column_name: 'To Do' }), environment)
     const todo = await todoResponse.json() as { id: string }
     const topicResponse = await app.request(`/api/projects/${project.id}/topics`, jsonRequest({ name: '機密トピック' }), environment)
     const topic = await topicResponse.json() as { id: string }
-    const column = database.columns[0]
+    const column = database.columns[0] as { id: string }
 
     const attempts: Array<[string, RequestInit]> = [
       [`/api/projects/${project.id}`, request('GET', 'outsider')],
@@ -424,11 +231,12 @@ describe('Team Todo API', () => {
     expect(database.todos).toEqual([expect.objectContaining({ id: todo.id, title: '機密タスク' })])
     expect(database.topics).toHaveLength(1)
     expect(database.comments).toHaveLength(0)
-    expect(column.title).toBe('To Do')
+    expect(database.columns[0].title).toBe('To Do')
   })
 
   it('別プロジェクトのトピックやメンバー以外の担当者を拒否する', async () => {
-    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'outsider', nickname: '部外者' })
+    database.seedUser('user-1', '山田')
+    database.seedUser('outsider', '部外者')
     const project = await createProject()
     const otherProject = await createProject('別プロジェクト', 'outsider')
     const otherTopicResponse = await app.request(`/api/projects/${otherProject.id}/topics`, jsonRequest({ name: '他所のトピック' }, 'POST', 'outsider'), environment)
@@ -456,7 +264,7 @@ describe('Team Todo API', () => {
 
   it('タスクを列IDで紐づけ、同じ名前の列があっても混ざらない', async () => {
     const project = await createProject()
-    const [todoColumn, progressColumn] = database.columns.filter((column) => column.project_id === project.id).sort((a, b) => Number(a.position) - Number(b.position))
+    const [todoColumn, progressColumn] = database.query<{ id: string }>('SELECT id FROM board_columns WHERE project_id = ? ORDER BY position', project.id)
     const firstResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '一つ目', column_id: todoColumn.id }), environment)
     const secondResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '二つ目', column_id: progressColumn.id }), environment)
     const first = await firstResponse.json() as { id: string; column_id: string; column_name: string }
@@ -476,7 +284,7 @@ describe('Team Todo API', () => {
   it('別プロジェクトの列IDを拒否する', async () => {
     const project = await createProject()
     const otherProject = await createProject('別プロジェクト')
-    const otherColumn = database.columns.find((column) => column.project_id === otherProject.id)!
+    const [otherColumn] = database.query<{ id: string }>('SELECT id FROM board_columns WHERE project_id = ?', otherProject.id)
     const response = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'タスク', column_id: otherColumn.id }), environment)
     expect(response.status).toBe(400)
   })
@@ -511,7 +319,7 @@ describe('Team Todo API', () => {
   })
 
   it('プロジェクト削除を各メンバーのユーザーチャンネルへ通知する', async () => {
-    database.users.push({ id: 'member-1', nickname: '佐藤' })
+    database.seedUser('member-1', '佐藤')
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '削除通知対象' }, 'POST', 'owner-1'), environment)
     const project = await createResponse.json() as { id: string }
     await app.request(`/api/projects/${project.id}/members`, jsonRequest({ user_id: 'member-1' }, 'POST', 'owner-1'), environment)
@@ -535,7 +343,8 @@ describe('Team Todo API', () => {
   })
 
   it('オーナーIDを偽装したメンバー追加・削除を拒否する', async () => {
-    database.users.push({ id: 'member-1', nickname: '佐藤' }, { id: 'attacker', nickname: '攻撃者' })
+    database.seedUser('member-1', '佐藤')
+    database.seedUser('attacker', '攻撃者')
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '保護対象' }, 'POST', 'owner-1'), environment)
     const project = await createResponse.json() as { id: string }
     await app.request(`/api/projects/${project.id}/members`, jsonRequest({ user_id: 'member-1' }, 'POST', 'owner-1'), environment)
@@ -548,7 +357,8 @@ describe('Team Todo API', () => {
   })
 
   it('オーナーがメンバーを追加し、対象ユーザーが通知を確認できる', async () => {
-    database.users.push({ id: 'owner-1', nickname: '山田', avatar_color: '#336699' }, { id: 'member-1', nickname: '佐藤', avatar_color: '#993366' })
+    database.seedUser('owner-1', '山田', '#336699')
+    database.seedUser('member-1', '佐藤', '#993366')
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '共同プロジェクト' }, 'POST', 'owner-1'), environment)
     const project = await createResponse.json() as { id: string }
 
@@ -585,7 +395,8 @@ describe('Team Todo API', () => {
   })
 
   it('オーナーによるメンバー削除とメンバー自身の脱退に対応する', async () => {
-    database.users.push({ id: 'owner-1', nickname: '山田' }, { id: 'member-1', nickname: '佐藤' })
+    database.seedUser('owner-1', '山田')
+    database.seedUser('member-1', '佐藤')
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '共同プロジェクト' }, 'POST', 'owner-1'), environment)
     const project = await createResponse.json() as { id: string }
     await app.request(`/api/projects/${project.id}/members`, jsonRequest({ user_id: 'member-1' }, 'POST', 'owner-1'), environment)

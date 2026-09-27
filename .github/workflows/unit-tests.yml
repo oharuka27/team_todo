@@ -37,6 +37,14 @@ jobs:
         working-directory: ${{ matrix.project }}
         run: npm ci
 
+      - name: Type check
+        working-directory: ${{ matrix.project }}
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: ${{ matrix.project }}
+        run: npm run lint --if-present
+
       - name: Run unit tests
         working-directory: ${{ matrix.project }}
         run: npm test -- --reporter=json --outputFile=test-results.json
@@ -53,7 +61,7 @@ jobs:
   email-results:
     name: Email test results
     needs: test
-    if: always() && github.event_name == 'push'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
@@ -84,6 +92,6 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: ${{ needs.test.result == 'success' && '[Team Todo] Unit tests passed' || '[Team Todo] Unit tests failed' }}
-          to: oharuka27@gmail.com
+          to: ${{ secrets.MAIL_TO }}
           from: 'Team Todo CI <${{ secrets.MAIL_USERNAME }}>'
           html_body: file://test-report.html
