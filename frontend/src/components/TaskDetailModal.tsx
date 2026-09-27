@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient, type ProjectMember, type TodoComment, type TodoItem, type Topic, type UserAccount } from '../services/api'
+import { apiClient, type ProjectMember, type TodoComment, type TodoItem, type Topic } from '../services/api'
 import './TaskDetailModal.css'
 
 interface TaskDetailModalProps {
@@ -14,38 +14,41 @@ interface TaskDetailModalProps {
 }
 
 export default function TaskDetailModal({ todo, userId, nickname, topics = [], members = [], refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
-  const [users, setUsers] = useState<UserAccount[]>([])
   const [comments, setComments] = useState<TodoComment[]>([])
   const [title, setTitle] = useState(todo.title)
   const [description, setDescription] = useState(todo.description ?? '')
+  const [syncedFields, setSyncedFields] = useState({ title: todo.title, description: todo.description ?? '' })
   const [comment, setComment] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    Promise.all([apiClient.getUsers(), apiClient.getTodoComments(todo.id)])
-      .then(([userData, commentData]) => {
-        setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, created_at: '', updated_at: '' }])
-        setComments(commentData)
-        setTitle(todo.title)
-        setDescription(todo.description ?? '')
-      })
-      .catch(() => {
-        setUsers([{ id: userId, nickname, created_at: '', updated_at: '' }])
-        setError('詳細情報の一部を読み込めませんでした')
-      })
-  }, [todo.id, todo.title, todo.description, userId, nickname, refreshToken])
+  // When the task changes on the server (e.g. another member's edit), refresh only the fields
+  // the user has not touched since the last sync, so realtime updates never discard a draft.
+  const serverFields = { title: todo.title, description: todo.description ?? '' }
+  if (serverFields.title !== syncedFields.title || serverFields.description !== syncedFields.description) {
+    if (title === syncedFields.title) setTitle(serverFields.title)
+    if (description === syncedFields.description) setDescription(serverFields.description)
+    setSyncedFields(serverFields)
+  }
 
-  const userNames = useMemo(() => new Map(users.map((user) => [user.id, user.nickname])), [users])
+  useEffect(() => {
+    let active = true
+    apiClient.getTodoComments(todo.id)
+      .then((commentData) => { if (active) setComments(commentData) })
+      .catch(() => { if (active) setError('コメントを読み込めませんでした') })
+    return () => { active = false }
+  }, [todo.id, refreshToken])
+
+  const userNames = useMemo(() => new Map(members.map((member) => [member.user_id, member.nickname])), [members])
   const creatorName = userNames.get(todo.user_id) ?? (todo.user_id === userId ? nickname : '不明なユーザー')
   // Only project members can be assigned; keep a former member visible while they are still the assignee.
   const assigneeOptions = useMemo(() => {
-    const options = members.length ? members.map((member) => ({ id: member.user_id, nickname: member.nickname })) : users
+    const options = members.map((member) => ({ id: member.user_id, nickname: member.nickname }))
     return todo.assignee_id && !options.some((option) => option.id === todo.assignee_id)
-      ? [...options, { id: todo.assignee_id, nickname: userNames.get(todo.assignee_id) ?? '不明なユーザー' }]
+      ? [...options, { id: todo.assignee_id, nickname: todo.assignee_id === userId ? nickname : '不明なユーザー' }]
       : options
-  }, [members, todo.assignee_id, userNames, users])
+  }, [members, nickname, todo.assignee_id, userId])
 
   const updateTodo = async (updates: Partial<TodoItem>, success: (updated: TodoItem) => void) => {
     setIsSaving(true)

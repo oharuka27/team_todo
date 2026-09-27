@@ -107,7 +107,9 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO project_members')) {
-      this.members.push({ project_id: params[0], user_id: params[1], role: sql.includes("'member'") ? 'member' : 'owner', created_at: params[2], notified_at: sql.includes("'member'") ? null : params[2], sort_order: params[3] })
+      const role = sql.includes("'member'") ? 'member' : 'owner'
+      const orders = this.members.filter((row) => row.user_id === params[3] && row.role === role).map((row) => Number(row.sort_order ?? 0))
+      this.members.push({ project_id: params[0], user_id: params[1], role, created_at: params[2], notified_at: role === 'member' ? null : params[2], sort_order: orders.length ? Math.max(...orders) + 1 : 0 })
       return 1
     }
     if (sql.startsWith('INSERT INTO board_columns')) {
@@ -115,7 +117,7 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('INSERT INTO todos')) {
-      this.todos.push({ id: params[0], project_id: params[1], topic_id: params[2], title: params[3], description: params[4], status: params[5], column_name: params[6], user_id: params[7], assignee_id: params[8], created_at: params[9], updated_at: params[10] })
+      this.todos.push({ id: params[0], project_id: params[1], topic_id: params[2], title: params[3], description: params[4], status: params[5], column_id: params[6], column_name: params[7], user_id: params[8], assignee_id: params[9], created_at: params[10], updated_at: params[11] })
       return 1
     }
     if (sql.startsWith('INSERT INTO topics')) {
@@ -127,10 +129,21 @@ class MemoryD1 {
       return 1
     }
     if (sql.startsWith('UPDATE todos SET title')) {
-      const todo = this.todos.find((row) => row.id === params[7])
+      const todo = this.todos.find((row) => row.id === params[8])
       if (!todo) return 0
-      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_name: params[3], assignee_id: params[4], topic_id: params[5], updated_at: params[6] })
+      Object.assign(todo, { title: params[0], description: params[1], status: params[2], column_id: params[3], column_name: params[4], assignee_id: params[5], topic_id: params[6], updated_at: params[7] })
       return 1
+    }
+    if (sql.startsWith('UPDATE board_columns SET title')) {
+      const column = this.columns.find((row) => row.id === params[2])
+      if (!column) return 0
+      Object.assign(column, { title: params[0], updated_at: params[1] })
+      return 1
+    }
+    if (sql.startsWith('UPDATE todos SET column_name')) {
+      const todos = this.todos.filter((row) => row.column_id === params[2])
+      todos.forEach((todo) => Object.assign(todo, { column_name: params[0], updated_at: params[1] }))
+      return todos.length
     }
     if (sql.startsWith('UPDATE users SET nickname')) {
       const user = this.users.find((row) => row.id === params[3])
@@ -441,6 +454,38 @@ describe('Team Todo API', () => {
     expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ column_name: 'Done' }, 'PUT'), environment)).status).toBe(200)
   })
 
+  it('タスクを列IDで紐づけ、同じ名前の列があっても混ざらない', async () => {
+    const project = await createProject()
+    const [todoColumn, progressColumn] = database.columns.filter((column) => column.project_id === project.id).sort((a, b) => Number(a.position) - Number(b.position))
+    const firstResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '一つ目', column_id: todoColumn.id }), environment)
+    const secondResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '二つ目', column_id: progressColumn.id }), environment)
+    const first = await firstResponse.json() as { id: string; column_id: string; column_name: string }
+    const second = await secondResponse.json() as { id: string }
+    expect(first).toMatchObject({ column_id: todoColumn.id, column_name: 'To Do' })
+
+    await app.request(`/api/columns/${progressColumn.id}`, jsonRequest({ title: 'To Do' }, 'PUT'), environment)
+    await app.request(`/api/columns/${progressColumn.id}`, jsonRequest({ title: '作業中' }, 'PUT'), environment)
+
+    expect(database.todos.find((todo) => todo.id === first.id)).toMatchObject({ column_id: todoColumn.id, column_name: 'To Do' })
+    expect(database.todos.find((todo) => todo.id === second.id)).toMatchObject({ column_id: progressColumn.id, column_name: '作業中' })
+
+    const moveResponse = await app.request(`/api/todos/${first.id}`, jsonRequest({ column_id: progressColumn.id }, 'PUT'), environment)
+    expect(await moveResponse.json()).toMatchObject({ column_id: progressColumn.id, column_name: '作業中' })
+  })
+
+  it('別プロジェクトの列IDを拒否する', async () => {
+    const project = await createProject()
+    const otherProject = await createProject('別プロジェクト')
+    const otherColumn = database.columns.find((column) => column.project_id === otherProject.id)!
+    const response = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'タスク', column_id: otherColumn.id }), environment)
+    expect(response.status).toBe(400)
+  })
+
+  it('不正なJSONには400を返す', async () => {
+    const response = await app.request('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth('user-1') }, body: '{invalid' }, environment)
+    expect(response.status).toBe(400)
+  })
+
   it('許可されたフロントエンドのオリジンだけにCORSを許可する', async () => {
     const corsEnvironment = { ...environment, CLERK_AUTHORIZED_PARTIES: 'https://team-todo.mitenecolab.com' }
     const preflight = (origin: string) => app.request('/api/projects', { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' } }, corsEnvironment)
@@ -449,7 +494,7 @@ describe('Team Todo API', () => {
     expect((await preflight('https://evil.example.com')).headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
-  it('プロジェクト削除時に関連データも削除し、再実行も成功する', async () => {
+  it('プロジェクト削除時に関連データも削除し、再実行は404を返す', async () => {
     const createResponse = await app.request('/api/projects', jsonRequest({ name: '削除対象' }), environment)
     const project = await createResponse.json() as { id: string }
     await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '関連タスク', column_name: 'To Do' }), environment)
@@ -462,7 +507,7 @@ describe('Team Todo API', () => {
     expect(database.todos).toHaveLength(0)
 
     const repeatedResponse = await app.request(`/api/projects/${project.id}`, request('DELETE'), environment)
-    expect(repeatedResponse.status).toBe(200)
+    expect(repeatedResponse.status).toBe(404)
   })
 
   it('プロジェクト削除を各メンバーのユーザーチャンネルへ通知する', async () => {

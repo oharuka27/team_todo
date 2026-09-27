@@ -245,6 +245,20 @@ describe('App', () => {
     expect(clerk.signOut).toHaveBeenCalled()
   })
 
+  it('プロジェクト作成に失敗したら一覧に追加せずエラーを表示する', async () => {
+    const user = userEvent.setup()
+    mockedApi.createProject.mockRejectedValue(new Error('network'))
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: 'プロジェクトを追加' }))
+    await user.type(screen.getByRole('textbox', { name: 'プロジェクト名' }), '保存されないプロジェクト')
+    await user.click(screen.getByRole('button', { name: '決定' }))
+
+    expect(await screen.findByText(/プロジェクトを作成できませんでした/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存されないプロジェクト' })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'プロジェクト名' })).toHaveValue('保存されないプロジェクト')
+  })
+
   it('プロジェクトを追加し、確認入力後に削除する', async () => {
     const user = userEvent.setup()
     mockedApi.getProjects.mockResolvedValue([project('project-1', '既存プロジェクト')])

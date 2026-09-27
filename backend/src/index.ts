@@ -9,7 +9,7 @@ interface Project { id: string; name: string; description: string | null; owner_
 interface UserAccount { id: string; nickname: string; avatar_color?: string; created_at: string; updated_at: string }
 interface ProjectMember { project_id: string; user_id: string; role: string; created_at: string; notified_at: string | null; sort_order: number }
 interface BoardColumn { id: string; project_id: string; title: string; position: number; created_at: string; updated_at: string }
-interface TodoItem { id: string; project_id: string; topic_id?: string | null; title: string; description: string | null; status: string; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
+interface TodoItem { id: string; project_id: string; topic_id?: string | null; title: string; description: string | null; status: string; column_id: string | null; column_name: string; user_id: string; assignee_id: string | null; created_at: string; updated_at: string }
 interface Topic { id: string; project_id: string; name: string; color?: string | null; created_at: string; updated_at: string }
 interface TodoComment { id: string; todo_id: string; user_id: string; body: string; created_at: string }
 
@@ -58,8 +58,16 @@ const findAccessibleProject = async (env: Bindings, projectId: string, userId: s
   return { project };
 };
 
-const columnExistsInProject = async (env: Bindings, columnName: string, projectId: string) =>
-  !!(await env.DB.prepare('SELECT * FROM board_columns WHERE project_id = ? AND title = ?').bind(projectId, columnName).first<BoardColumn>());
+// Tasks belong to a column by ID; column_name is a display copy kept in sync on rename.
+// Older clients only send column_name, so it is still accepted as a lookup key.
+const resolveColumn = async (env: Bindings, projectId: string, input: { column_id?: string | null; column_name?: string }) => {
+  if (input.column_id) {
+    const column = await env.DB.prepare('SELECT * FROM board_columns WHERE id = ?').bind(input.column_id).first<BoardColumn>();
+    return column?.project_id === projectId ? column : null;
+  }
+  if (!input.column_name) return null;
+  return await env.DB.prepare('SELECT * FROM board_columns WHERE project_id = ? AND title = ? ORDER BY position ASC').bind(projectId, input.column_name).first<BoardColumn>();
+};
 
 // The frontend origins; used both for Clerk's azp check and as the CORS allowlist.
 const frontendOrigins = (env: Bindings) => env.CLERK_AUTHORIZED_PARTIES?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? [];
@@ -73,7 +81,12 @@ app.use('*', cors({ origin: (origin, c) => {
   const origins = frontendOrigins(c.env);
   return !origins.length || origins.includes(origin) ? origin : null;
 } }));
-app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
+app.onError((error, c) => {
+  // c.req.json() throws SyntaxError for a malformed request body.
+  if (error instanceof SyntaxError) return c.json({ error: 'Invalid JSON body' }, 400);
+  console.error('Unhandled API error:', error);
+  return c.json({ error: 'Internal server error' }, 500);
+});
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 // Every API request is attributed to the user in the verified Clerk session token.
@@ -177,7 +190,6 @@ app.post('/api/projects', async (c) => {
   if (!name) return c.json({ error: 'name is required' }, 400);
 
   const now = new Date().toISOString();
-  const order = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_members WHERE user_id = ? AND role = 'owner'").bind(userId).first<{ next_order: number }>();
   const project: Project = { id: uuidv4(), name, description: body.description?.trim() || null, owner_id: userId, created_at: now, updated_at: now };
   const columns = [
     { id: uuidv4(), title: 'To Do', position: 0 },
@@ -188,7 +200,8 @@ app.post('/api/projects', async (c) => {
 
   await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(project.id, project.name, project.description, project.owner_id, now, now),
-    c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, sort_order) VALUES (?, ?, 'owner', ?, ?)").bind(project.id, userId, now, order?.next_order ?? 0),
+    // The next sort_order is computed inside the INSERT so concurrent requests cannot read the same value.
+    c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, sort_order) VALUES (?, ?, 'owner', ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM project_members WHERE user_id = ? AND role = 'owner'))").bind(project.id, userId, now, userId),
     ...columns.map((column) => c.env.DB.prepare('INSERT INTO board_columns (id, project_id, title, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(column.id, project.id, column.title, column.position, now, now)),
   ]);
   return c.json(project, 201);
@@ -247,9 +260,7 @@ app.put('/api/projects/:id', async (c) => {
 app.delete('/api/projects/:id', async (c) => {
   const id = c.req.param('id');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first<Project>();
-  // DELETE is idempotent. A project created by the frontend's offline fallback
-  // does not exist in D1, but removing it from the client is still successful.
-  if (!project) return c.json({ success: true });
+  if (!project) return c.json({ error: 'Project not found' }, 404);
   if (project.owner_id !== c.get('userId')) return c.json({ error: 'Only the owner can delete the project' }, 403);
   const { results: members } = await c.env.DB.prepare("SELECT user_id FROM project_members WHERE project_id = ? AND role = 'member'").bind(id).all<Pick<ProjectMember, 'user_id'>>();
 
@@ -288,8 +299,7 @@ app.post('/api/projects/:id/members', async (c) => {
   if (!user) return c.json({ error: 'User not found' }, 404);
   const existing = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, body.user_id).first<ProjectMember>();
   if (!existing) {
-    const order = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_members WHERE user_id = ? AND role = 'member'").bind(body.user_id).first<{ next_order: number }>();
-    await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at, sort_order) VALUES (?, ?, 'member', ?, NULL, ?)").bind(projectId, body.user_id, new Date().toISOString(), order?.next_order ?? 0).run();
+    await c.env.DB.prepare("INSERT INTO project_members (project_id, user_id, role, created_at, notified_at, sort_order) VALUES (?, ?, 'member', ?, NULL, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM project_members WHERE user_id = ? AND role = 'member'))").bind(projectId, body.user_id, new Date().toISOString(), body.user_id).run();
     await Promise.all([
       broadcast(c.env, `user:${body.user_id}`, { type: 'membership.added', project_id: projectId, user_id: body.user_id }),
       broadcast(c.env, `project:${projectId}`, { type: 'member.added', project_id: projectId, user_id: body.user_id }),
@@ -376,24 +386,25 @@ app.put('/api/columns/:id', async (c) => {
   const now = new Date().toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE board_columns SET title = ?, updated_at = ? WHERE id = ?').bind(title, now, id),
-    c.env.DB.prepare('UPDATE todos SET column_name = ?, updated_at = ? WHERE project_id = ? AND column_name = ?').bind(title, now, column.project_id, column.title),
+    c.env.DB.prepare('UPDATE todos SET column_name = ?, updated_at = ? WHERE column_id = ?').bind(title, now, id),
   ]);
   await broadcast(c.env, `project:${column.project_id}`, { type: 'column.updated', project_id: column.project_id });
   return c.json({ ...column, title, updated_at: now });
 });
 
 app.post('/api/todos', async (c) => {
-  const body = await c.req.json() as { project_id?: string; topic_id?: string | null; title?: string; description?: string; column_name?: string };
+  const body = await c.req.json() as { project_id?: string; topic_id?: string | null; title?: string; description?: string; column_id?: string; column_name?: string };
   const userId = c.get('userId');
   const title = body.title?.trim();
-  if (!body.project_id || !title || !body.column_name) return c.json({ error: 'project_id, title and column_name are required' }, 400);
+  if (!body.project_id || !title || (!body.column_id && !body.column_name)) return c.json({ error: 'project_id, title and column_id are required' }, 400);
   const { error } = await findAccessibleProject(c.env, body.project_id, userId);
   if (error) return c.json({ error: error.message }, error.status);
   if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, body.project_id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
-  if (!(await columnExistsInProject(c.env, body.column_name, body.project_id))) return c.json({ error: 'column_name must be a column of the project' }, 400);
+  const column = await resolveColumn(c.env, body.project_id, body);
+  if (!column) return c.json({ error: 'column must belong to the project' }, 400);
   const now = new Date().toISOString();
-  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
-  await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
+  const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_id: column.id, column_name: column.title, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
+  await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_id, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_id, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.created', project_id: todo.project_id, user_id: todo.user_id });
   return c.json(todo, 201);
 });
@@ -407,16 +418,18 @@ app.get('/api/projects/:projectId/todos', async (c) => {
 
 app.put('/api/todos/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name' | 'assignee_id'>> & { topic_id?: string | null };
+  const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_id' | 'column_name' | 'assignee_id'>> & { topic_id?: string | null };
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
   const { project, error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
   if (error) return c.json({ error: error.message }, error.status);
   if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, project.id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
   if (body.assignee_id && !(await isProjectMember(c.env, project, body.assignee_id))) return c.json({ error: 'assignee_id must be a project member' }, 400);
-  if (body.column_name !== undefined && !(await columnExistsInProject(c.env, body.column_name, project.id))) return c.json({ error: 'column_name must be a column of the project' }, 400);
-  const updated = { ...todo, topic_id: body.topic_id === undefined ? (todo as TodoItem & { topic_id?: string | null }).topic_id ?? null : body.topic_id, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
-  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, topic_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.topic_id, updated.updated_at, id).run();
+  const columnChanged = body.column_id !== undefined || body.column_name !== undefined;
+  const column = columnChanged ? await resolveColumn(c.env, project.id, body) : null;
+  if (columnChanged && !column) return c.json({ error: 'column must belong to the project' }, 400);
+  const updated = { ...todo, topic_id: body.topic_id === undefined ? (todo as TodoItem & { topic_id?: string | null }).topic_id ?? null : body.topic_id, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_id: column ? column.id : todo.column_id, column_name: column ? column.title : todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
+  await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_id = ?, column_name = ?, assignee_id = ?, topic_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_id, updated.column_name, updated.assignee_id, updated.topic_id, updated.updated_at, id).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.updated', project_id: todo.project_id });
   return c.json(updated);
 });

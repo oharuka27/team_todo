@@ -2,7 +2,7 @@ import { SignIn, useAuth, useClerk } from '@clerk/react'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import './App.css'
 import ProjectPage from './pages/ProjectPage'
-import { apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
+import { ApiError, apiClient, type Project, type ProjectNotification, type UserAccount } from './services/api'
 
 const Icon = ({ children, size = 20 }: { children: React.ReactNode; size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
@@ -31,6 +31,7 @@ function Workspace({ userId }: { userId: string }) {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
@@ -156,16 +157,15 @@ function Workspace({ userId }: { userId: string }) {
   const createProject = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!newProjectName.trim()) return
-    setIsCreating(true)
+    setIsCreating(true); setCreateError(null)
     try {
       const created = await apiClient.createProject(newProjectName.trim(), undefined)
       setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
+      setNewProjectName(''); setIsCreateOpen(false)
     } catch {
-      const now = new Date().toISOString()
-      const created: Project = { id: crypto.randomUUID(), name: newProjectName.trim(), owner_id: userId, created_at: now, updated_at: now }
-      setProjects((items) => [...items, created]); setSelectedProjectId(created.id)
+      setCreateError('プロジェクトを作成できませんでした。時間をおいてもう一度お試しください。')
     } finally {
-      setIsCreating(false); setNewProjectName(''); setIsCreateOpen(false)
+      setIsCreating(false)
     }
   }
 
@@ -235,7 +235,8 @@ function Workspace({ userId }: { userId: string }) {
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await apiClient.deleteProject(projectToDelete.id)
+      // A 404 means the project is already gone, which is the outcome the user asked for.
+      await apiClient.deleteProject(projectToDelete.id).catch((error: unknown) => { if (!(error instanceof ApiError && error.status === 404)) throw error })
       const deletedIndex = projects.findIndex((project) => project.id === projectToDelete.id)
       const remainingProjects = projects.filter((project) => project.id !== projectToDelete.id)
       setProjects(remainingProjects)
@@ -341,14 +342,14 @@ function Workspace({ userId }: { userId: string }) {
             <div className="project-group"><div className="project-group-heading"><span>オーナープロジェクト</span><b>{ownerProjects.length}</b></div>{renderProjectItems(ownerProjects, 0, 'owner')}</div>
             <div className="project-group"><div className="project-group-heading"><span>メンバープロジェクト</span><b>{memberProjects.length}</b></div>{renderProjectItems(memberProjects, ownerProjects.length, 'member')}</div>
           </nav>
-          <button className="add-project-button" onClick={() => setIsCreateOpen(true)}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
+          <button className="add-project-button" onClick={() => { setCreateError(null); setIsCreateOpen(true) }}><Icon size={18}><path d="M12 5v14M5 12h14"/></Icon>プロジェクトを追加</button>
         </div>
         {nickname && <div className="sidebar-footer"><button className="avatar avatar-button" style={{ backgroundColor: avatarColor }} onClick={() => setIsUserMenuOpen((open) => !open)} aria-label="ユーザーメニュー">{nicknameInitial}</button><div><strong>{nickname}</strong><small>オンライン</small></div>{isUserMenuOpen && <div className="user-settings-menu" role="menu"><button role="menuitem" onClick={openUserSettings}>⚙ 設定</button><button role="menuitem" onClick={() => void signOut()}>↪ ログアウト</button></div>}</div>}
       </aside>
 
       <main className="main-area">
         {!isAccountLoaded || (!notificationsChecked && nickname) ? <div className="board-loading"><span/><p>ワークスペースを読み込んでいます…</p></div> : selectedProject ? <ProjectPage key={selectedProject.id} project={selectedProject} userId={userId} nickname={nickname} avatarColor={avatarColor} onProjectUpdated={updateProjectInList} /> : (
-          <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => setIsCreateOpen(true)}>プロジェクトを追加</button></div>
+          <div className="empty-workspace"><span className="empty-illustration"><Icon size={34}><path d="M4 5h16v14H4zM4 10h16M9 10v9"/></Icon></span><h1>プロジェクトを作成しましょう</h1><p>サイドバーの追加ボタンから、最初のボードを作成できます。</p><button onClick={() => { setCreateError(null); setIsCreateOpen(true) }}>プロジェクトを追加</button></div>
         )}
       </main>
 
@@ -396,6 +397,7 @@ function Workspace({ userId }: { userId: string }) {
             <form onSubmit={createProject}>
               <label>プロジェクト名<input autoFocus value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="例：Webサイトリニューアル" /></label>
               <p className="enter-hint">Enterキーでも作成できます</p>
+              {createError && <p className="delete-error" role="alert">{createError}</p>}
               <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setIsCreateOpen(false)}>キャンセル</button><button type="submit" className="primary-button" disabled={!newProjectName.trim() || isCreating}>{isCreating ? '作成中…' : '決定'}</button></div>
             </form>
           </div>

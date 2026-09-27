@@ -25,6 +25,7 @@ export interface TodoItem {
   title: string;
   description?: string;
   status: string;
+  column_id?: string | null;
   column_name: string;
   user_id: string;
   assignee_id?: string | null;
@@ -218,7 +219,7 @@ class ApiClient {
   async createTodo(
     projectId: string,
     title: string,
-    columnName: string,
+    columnId: string,
     description?: string,
     topicId?: string | null
   ): Promise<TodoItem> {
@@ -226,7 +227,7 @@ class ApiClient {
       project_id: projectId,
       title,
       description,
-      column_name: columnName,
+      column_id: columnId,
       topic_id: topicId,
     });
   }

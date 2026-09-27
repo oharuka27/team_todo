@@ -65,17 +65,16 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   }, [isAssigneeFilterOpen])
 
   useEffect(() => {
-    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers(), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
-      .then(([todoData, columnData, userData, topicData, memberData]) => {
+    Promise.all([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
+      .then(([todoData, columnData, topicData, memberData]) => {
         setTodos(todoData)
         setColumns(columnData.length ? columnData : defaultColumns())
-        setUsers(userData.some((user) => user.id === userId) ? userData : [...userData, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
         setTopics(topicData)
         setMembers(memberData)
       })
-      .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('オフラインモードで表示しています') })
+      .catch(() => { setTodos([]); setColumns(defaultColumns()); setNotice('プロジェクトを読み込めませんでした') })
       .finally(() => setLoading(false))
-  }, [project.id, userId, nickname, avatarColor])
+  }, [project.id])
 
   useEffect(() => {
     if (typeof apiClient.connectProjectEvents !== 'function') return
@@ -88,11 +87,10 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       try { type = (JSON.parse(String(event.data)) as { type?: string }).type ?? '' } catch { return }
       window.dispatchEvent(new Event('team-todo-refresh'))
       if (type === 'project.deleted') return
-      const [todoResult, columnResult, userResult, topicResult, memberResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getUsers(), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
+      const [todoResult, columnResult, topicResult, memberResult] = await Promise.allSettled([apiClient.getTodos(project.id), apiClient.getColumns(project.id), apiClient.getTopics(project.id), apiClient.getProjectMembers(project.id)])
       if (!active) return
       if (todoResult.status === 'fulfilled') setTodos(todoResult.value)
       if (columnResult.status === 'fulfilled') setColumns(columnResult.value.length ? columnResult.value : defaultColumns())
-      if (userResult.status === 'fulfilled') setUsers(userResult.value.some((user) => user.id === userId) ? userResult.value : [...userResult.value, { id: userId, nickname, avatar_color: avatarColor, created_at: '', updated_at: '' }])
       if (topicResult.status === 'fulfilled') setTopics(topicResult.value)
       if (memberResult.status === 'fulfilled') setMembers(memberResult.value)
       setRealtimeRevision((revision) => revision + 1)
@@ -117,7 +115,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       if (retryId !== null) window.clearTimeout(retryId)
       socket?.close()
     }
-  }, [project.id, userId, nickname, avatarColor, onProjectUpdated])
+  }, [project.id, onProjectUpdated])
 
   const filteredTodos = useMemo(() => todos.filter((todo) => {
     const matchesQuery = todo.title.toLowerCase().includes(query.toLowerCase())
@@ -128,11 +126,14 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     const memberIds = new Set(members.map((member) => member.user_id))
     return users.filter((user) => user.id !== project.owner_id && !memberIds.has(user.id))
   }, [members, project.owner_id, users])
-  const columnTodos = (title: string) => filteredTodos.filter((todo) => todo.column_name === title)
+  // Tasks created before column IDs existed (or loaded offline) fall back to matching by title.
+  const inColumn = (todo: TodoItem, column: BoardColumn) => todo.column_id ? todo.column_id === column.id : todo.column_name === column.title
+  const columnTodos = (column: BoardColumn) => filteredTodos.filter((todo) => inColumn(todo, column))
   const assigneeDisplay = (todo: TodoItem) => {
     if (!todo.assignee_id) return { initial: '未', name: '未アサイン', color: '#a8b0b3', unassigned: true }
-    const name = users.find((user) => user.id === todo.assignee_id)?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
-    const color = users.find((user) => user.id === todo.assignee_id)?.avatar_color ?? (todo.assignee_id === userId ? avatarColor : '#d9eee8')
+    const member = members.find((item) => item.user_id === todo.assignee_id)
+    const name = member?.nickname ?? (todo.assignee_id === userId ? nickname : '不明な担当者')
+    const color = member?.avatar_color ?? (todo.assignee_id === userId ? avatarColor : '#d9eee8')
     return { initial: Array.from(name)[0]?.toUpperCase() || '?', name, color, unassigned: false }
   }
   const topicDisplay = (todo: TodoItem) => {
@@ -141,7 +142,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     return { name: topic?.name ?? '不明なトピック', color: topic?.color || '#5f91c9', unassigned: !topic }
   }
 
-  const addTodo = async (columnTitle: string) => {
+  const addTodo = async (column: BoardColumn) => {
     if (!newTodoText.trim()) return
     const title = newTodoText.trim()
     const now = new Date().toISOString()
@@ -151,7 +152,8 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       project_id: project.id,
       title,
       status: 'not_started',
-      column_name: columnTitle,
+      column_id: column.id,
+      column_name: column.title,
       user_id: userId,
       created_at: now,
       updated_at: now,
@@ -162,16 +164,25 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     setAddingTo(null)
 
     try {
-      const created = await apiClient.createTodo(project.id, title, columnTitle)
+      const created = await apiClient.createTodo(project.id, title, column.id)
       setTodos((items) => items.map((todo) => todo.id === temporaryId ? created : todo))
     } catch {
-      setTodos((items) => items.map((todo) => todo.id === temporaryId ? { ...todo, id: crypto.randomUUID() } : todo))
+      setTodos((items) => items.filter((todo) => todo.id !== temporaryId))
+      setNotice('タスクを追加できませんでした')
     }
   }
-  const deleteTodo = async (id: string) => { setTodos((items) => items.filter((todo) => todo.id !== id)); try { await apiClient.deleteTodo(id) } catch { /* local fallback */ } }
-  const moveTodo = async (id: string, columnName: string) => {
-    const previous = todos; setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_name: columnName } : todo))
-    try { await apiClient.updateTodo(id, { column_name: columnName }) } catch { setTodos(previous) }
+  const deleteTodo = async (id: string) => {
+    const removed = todos.find((todo) => todo.id === id)
+    setTodos((items) => items.filter((todo) => todo.id !== id))
+    try { await apiClient.deleteTodo(id) }
+    catch {
+      if (removed) setTodos((items) => items.some((todo) => todo.id === id) ? items : [...items, removed])
+      setNotice('タスクを削除できませんでした')
+    }
+  }
+  const moveTodo = async (id: string, column: BoardColumn) => {
+    const previous = todos; setTodos((items) => items.map((todo) => todo.id === id ? { ...todo, column_id: column.id, column_name: column.title } : todo))
+    try { await apiClient.updateTodo(id, { column_id: column.id }) } catch { setTodos(previous); setNotice('タスクを移動できませんでした') }
   }
   const startTodoEdit = (todo: TodoItem) => {
     setEditingTodoId(todo.id)
@@ -201,9 +212,11 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   }
   const saveColumn = async (column: BoardColumn) => {
     const title = editingColumnText.trim(); if (!title) return
-    const oldTitle = column.title
-    setColumns((items) => items.map((item) => item.id === column.id ? { ...item, title } : item)); setTodos((items) => items.map((todo) => todo.column_name === oldTitle ? { ...todo, column_name: title } : todo)); setEditingColumnId(null)
-    try { await apiClient.updateColumn(column.id, title) } catch { /* local fallback */ }
+    setEditingColumnId(null)
+    if (title === column.title) return
+    const previousColumns = columns, previousTodos = todos
+    setColumns((items) => items.map((item) => item.id === column.id ? { ...item, title } : item)); setTodos((items) => items.map((todo) => inColumn(todo, column) ? { ...todo, column_name: title } : todo))
+    try { await apiClient.updateColumn(column.id, title) } catch { setColumns(previousColumns); setTodos(previousTodos); setNotice('列名を変更できませんでした') }
   }
 
   const createTopic = async (event: React.FormEvent) => {
@@ -215,7 +228,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const createTopicTask = async (topicId: string | null) => {
     const title = newTopicTaskTitle.trim(); if (!title) return
     try {
-      const created = await apiClient.createTodo(project.id, title, columns[0]?.title ?? 'To Do', undefined, topicId)
+      const created = await apiClient.createTodo(project.id, title, columns[0]?.id ?? '', undefined, topicId)
       setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
     } catch { setNotice('タスクを作成できませんでした') }
   }
@@ -236,10 +249,11 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
     catch { setTopics(previous) }
   }
 
-  const openMemberDialog = () => {
+  const openMemberDialog = async () => {
     setSelectedMemberIds([])
     setMemberError(null)
     setIsMemberDialogOpen(true)
+    try { setUsers(await apiClient.getUsers()) } catch { setMemberError('ユーザー一覧を取得できませんでした。') }
   }
   const toggleMember = (memberId: string) => setSelectedMemberIds((ids) => ids.includes(memberId) ? ids.filter((id) => id !== memberId) : [...ids, memberId])
   const toggleAssigneeFilter = (filter: string) => {
@@ -330,13 +344,13 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
       {loading ? <div className="board-loading"><span/><p>プロジェクトを読み込んでいます…</p></div> : activeView === 'board' ? (
         <div className="kanban-board">
           {columns.map((column, index) => (
-            <article className={`kanban-column column-${index % 4}`} key={column.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { const id = e.dataTransfer.getData('todo-id'); if (id) moveTodo(id, column.title) }}>
+            <article className={`kanban-column column-${index % 4}`} key={column.id} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { const id = e.dataTransfer.getData('todo-id'); if (id) moveTodo(id, column) }}>
               <div className="column-header">
-                {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column.title).length}</b></button>}
+                {editingColumnId === column.id ? <input className="column-title-input" value={editingColumnText} onChange={(e) => setEditingColumnText(e.target.value)} onBlur={() => saveColumn(column)} onKeyDown={(e) => { if (e.key === 'Enter') saveColumn(column); if (e.key === 'Escape') setEditingColumnId(null) }} autoFocus /> : <button className="column-title" onDoubleClick={() => { setEditingColumnId(column.id); setEditingColumnText(column.title) }} title="ダブルクリックで名前を編集"><span>{column.title}</span><b>{columnTodos(column).length}</b></button>}
                 <button className="more-button" aria-label="列のメニュー">•••</button>
               </div>
               <div className="todo-list">
-                {columnTodos(column.title).map((todo) => {
+                {columnTodos(column).map((todo) => {
                   const assignee = assigneeDisplay(todo)
                   const topic = topicDisplay(todo)
                   return (
@@ -352,7 +366,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
                   )
                 })}
                 {addingTo === column.id ? (
-                  <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column.title) }}>
+                  <form className="inline-add" onSubmit={(e) => { e.preventDefault(); addTodo(column) }}>
                     <textarea
                       autoFocus
                       value={newTodoText}
@@ -360,7 +374,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                           e.preventDefault()
-                          addTodo(column.title)
+                          addTodo(column)
                         }
                         if (e.key === 'Escape') setAddingTo(null)
                       }}

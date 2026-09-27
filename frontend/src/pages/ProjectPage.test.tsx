@@ -94,11 +94,30 @@ describe('ProjectPage', () => {
 
     expect(await screen.findByText('追加タスク')).toBeInTheDocument()
     expect(screen.getAllByTitle('担当: 山田')).toHaveLength(2)
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '追加タスク', 'To Do')
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '追加タスク', 'todo-column')
 
     await user.click(screen.getByRole('button', { name: '追加タスクを削除' }))
     await waitFor(() => expect(mockedApi.deleteTodo).toHaveBeenCalledWith('todo-2'))
     expect(screen.queryByText('追加タスク')).not.toBeInTheDocument()
+  })
+
+  it('タスクの追加・削除に失敗したら元に戻して通知する', async () => {
+    const user = userEvent.setup()
+    mockedApi.getTodos.mockResolvedValue([todo('todo-1', '既存タスク')])
+    mockedApi.createTodo.mockRejectedValue(new Error('network'))
+    mockedApi.deleteTodo.mockRejectedValue(new Error('network'))
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={onProjectUpdated} />)
+    await screen.findByText('既存タスク')
+
+    await user.click(screen.getAllByRole('button', { name: /タスクを追加/ })[0])
+    await user.type(screen.getByPlaceholderText('タスク名を入力'), '保存されないタスク')
+    await user.click(screen.getByRole('button', { name: '追加' }))
+    expect(await screen.findByText('タスクを追加できませんでした')).toBeInTheDocument()
+    expect(screen.queryByText('保存されないタスク')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '既存タスクを削除' }))
+    expect(await screen.findByText('タスクを削除できませんでした')).toBeInTheDocument()
+    expect(screen.getByText('既存タスク')).toBeInTheDocument()
   })
 
   it('トピックページでトピックと配下タスクを作成し、共通詳細画面を開く', async () => {
@@ -118,7 +137,7 @@ describe('ProjectPage', () => {
     await user.click(screen.getByRole('button', { name: '追加' }))
 
     expect(mockedApi.createTopic).toHaveBeenCalledWith(project.id, 'フロントエンド', expect.stringMatching(/^#[0-9a-fA-F]{6}$/))
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'To Do', undefined, topic.id)
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '画面を作る', 'todo-column', undefined, topic.id)
     await user.click(await screen.findByRole('button', { name: /画面を作る/ }))
     expect(screen.getByRole('dialog', { name: '画面を作る' })).toBeInTheDocument()
   })
@@ -137,7 +156,7 @@ describe('ProjectPage', () => {
     await user.click(within(unassignedCard).getByRole('button', { name: /タスクを追加/ }))
     await user.type(within(unassignedCard).getByRole('textbox', { name: '無所属のタスク名' }), '無所属タスク')
     await user.click(within(unassignedCard).getByRole('button', { name: '追加' }))
-    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'To Do', undefined, null)
+    expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'todo-column', undefined, null)
 
     const taskButton = await within(unassignedCard).findByRole('button', { name: /無所属タスク/ })
     const targetCard = screen.getByRole('heading', { name: '移動先' }).closest('.topic-card') as HTMLElement
@@ -182,14 +201,14 @@ describe('ProjectPage', () => {
     fireEvent.dragStart(taskCard, { dataTransfer })
     fireEvent.drop(progressColumn, { dataTransfer })
 
-    await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-1', { column_name: 'In Progress' }))
+    await waitFor(() => expect(mockedApi.updateTodo).toHaveBeenCalledWith('todo-1', { column_id: 'progress-column' }))
     expect(within(progressColumn).getByText('移動するタスク')).toBeInTheDocument()
   })
 
   it('担当者の先頭文字を表示し、未アサインは灰色の「未」にする', async () => {
-    mockedApi.getUsers.mockResolvedValue([
-      { id: 'user-1', nickname: '山田', created_at: now, updated_at: now },
-      { id: 'user-2', nickname: '佐藤', created_at: now, updated_at: now },
+    mockedApi.getProjectMembers.mockResolvedValue([
+      { project_id: project.id, user_id: 'user-1', role: 'owner', nickname: '山田' },
+      { project_id: project.id, user_id: 'user-2', role: 'member', nickname: '佐藤' },
     ])
     mockedApi.getTodos.mockResolvedValue([
       { ...todo('todo-1', '佐藤担当'), assignee_id: 'user-2' },
@@ -203,9 +222,9 @@ describe('ProjectPage', () => {
   })
 
   it('担当者アイコンの文字色を背景色の明るさに合わせる', async () => {
-    mockedApi.getUsers.mockResolvedValue([
-      { id: 'user-dark', nickname: '暗色', avatar_color: '#123456', created_at: now, updated_at: now },
-      { id: 'user-light', nickname: '明色', avatar_color: '#f2e9a1', created_at: now, updated_at: now },
+    mockedApi.getProjectMembers.mockResolvedValue([
+      { project_id: project.id, user_id: 'user-dark', role: 'member', nickname: '暗色', avatar_color: '#123456' },
+      { project_id: project.id, user_id: 'user-light', role: 'member', nickname: '明色', avatar_color: '#f2e9a1' },
     ])
     mockedApi.getTodos.mockResolvedValue([
       { ...todo('todo-dark', '暗い背景'), assignee_id: 'user-dark' },
@@ -372,6 +391,6 @@ describe('ProjectPage', () => {
     await user.type(screen.getByRole('textbox', { name: '無所属のタスク名' }), '無所属タスク')
     await user.click(screen.getByRole('button', { name: '追加' }))
 
-    await waitFor(() => expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', '未着手', undefined, null))
+    await waitFor(() => expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', 'todo-column', undefined, null))
   })
 })
