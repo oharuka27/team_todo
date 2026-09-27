@@ -359,4 +359,19 @@ describe('ProjectPage', () => {
     expect(await screen.findByRole('heading', { name: project.name })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'プロジェクト名を変更' })).not.toBeInTheDocument()
   })
+
+  it('トピックからのタスク作成では、名前を変更した先頭の列を使う', async () => {
+    const user = userEvent.setup()
+    const renamedColumns: BoardColumn[] = [{ id: 'todo-column', title: '未着手', position: 0 }, { id: 'done-column', title: '完了', position: 1 }]
+    mockedApi.getColumns.mockResolvedValue(renamedColumns)
+    mockedApi.createTodo.mockResolvedValue({ ...todo('todo-free', '無所属タスク', '未着手'), topic_id: null })
+    render(<ProjectPage project={project} userId="user-1" nickname="山田" onProjectUpdated={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'トピック' }))
+    await user.click(screen.getByRole('button', { name: '＋ タスクを追加' }))
+    await user.type(screen.getByRole('textbox', { name: '無所属のタスク名' }), '無所属タスク')
+    await user.click(screen.getByRole('button', { name: '追加' }))
+
+    await waitFor(() => expect(mockedApi.createTodo).toHaveBeenCalledWith(project.id, '無所属タスク', '未着手', undefined, null))
+  })
 })

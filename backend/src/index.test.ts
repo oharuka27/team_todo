@@ -63,6 +63,7 @@ class MemoryD1 {
       return row ? { id: row.id } : undefined
     }
     if (sql.includes('FROM projects WHERE id')) return this.projects.find((row) => row.id === params[0])
+    if (sql.includes('FROM board_columns WHERE project_id = ? AND title = ?')) return this.columns.find((row) => row.project_id === params[0] && row.title === params[1])
     if (sql.includes('FROM board_columns WHERE id')) return this.columns.find((row) => row.id === params[0])
     if (sql.includes('FROM topics WHERE id')) return this.topics.find((row) => row.id === params[0])
     if (sql.includes('FROM todos WHERE id')) return this.todos.find((row) => row.id === params[0])
@@ -427,6 +428,25 @@ describe('Team Todo API', () => {
     expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ topic_id: otherTopic.id }, 'PUT'), environment)).status).toBe(400)
     expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ assignee_id: 'outsider' }, 'PUT'), environment)).status).toBe(400)
     expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ assignee_id: null }, 'PUT'), environment)).status).toBe(200)
+  })
+
+  it('プロジェクトに存在しない列名を拒否する', async () => {
+    const project = await createProject()
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'タスク', column_name: '存在しない列' }), environment)
+    expect(createResponse.status).toBe(400)
+
+    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'タスク', column_name: 'To Do' }), environment)
+    const todo = await todoResponse.json() as { id: string }
+    expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ column_name: '存在しない列' }, 'PUT'), environment)).status).toBe(400)
+    expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ column_name: 'Done' }, 'PUT'), environment)).status).toBe(200)
+  })
+
+  it('許可されたフロントエンドのオリジンだけにCORSを許可する', async () => {
+    const corsEnvironment = { ...environment, CLERK_AUTHORIZED_PARTIES: 'https://team-todo.mitenecolab.com' }
+    const preflight = (origin: string) => app.request('/api/projects', { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' } }, corsEnvironment)
+
+    expect((await preflight('https://team-todo.mitenecolab.com')).headers.get('Access-Control-Allow-Origin')).toBe('https://team-todo.mitenecolab.com')
+    expect((await preflight('https://evil.example.com')).headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
   it('プロジェクト削除時に関連データも削除し、再実行も成功する', async () => {

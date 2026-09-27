@@ -215,7 +215,7 @@ export default function ProjectPage({ project, userId, nickname, avatarColor = '
   const createTopicTask = async (topicId: string | null) => {
     const title = newTopicTaskTitle.trim(); if (!title) return
     try {
-      const created = await apiClient.createTodo(project.id, title, 'To Do', undefined, topicId)
+      const created = await apiClient.createTodo(project.id, title, columns[0]?.title ?? 'To Do', undefined, topicId)
       setTodos((items) => [...items, created]); setAddingTopicTaskId(null); setNewTopicTaskTitle('')
     } catch { setNotice('タスクを作成できませんでした') }
   }

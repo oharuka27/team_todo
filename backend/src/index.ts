@@ -58,11 +58,21 @@ const findAccessibleProject = async (env: Bindings, projectId: string, userId: s
   return { project };
 };
 
+const columnExistsInProject = async (env: Bindings, columnName: string, projectId: string) =>
+  !!(await env.DB.prepare('SELECT * FROM board_columns WHERE project_id = ? AND title = ?').bind(projectId, columnName).first<BoardColumn>());
+
+// The frontend origins; used both for Clerk's azp check and as the CORS allowlist.
+const frontendOrigins = (env: Bindings) => env.CLERK_AUTHORIZED_PARTIES?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? [];
+
 const topicBelongsToProject = async (env: Bindings, topicId: string, projectId: string) =>
   (await env.DB.prepare('SELECT * FROM topics WHERE id = ?').bind(topicId).first<Topic>())?.project_id === projectId;
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
-app.use('*', cors());
+// Without a configured allowlist (e.g. tests), fall back to allowing any origin.
+app.use('*', cors({ origin: (origin, c) => {
+  const origins = frontendOrigins(c.env);
+  return !origins.length || origins.includes(origin) ? origin : null;
+} }));
 app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
@@ -72,8 +82,8 @@ app.use('/api/*', async (c, next) => {
   const token = c.req.header('Authorization')?.match(/^Bearer (.+)$/)?.[1] ?? (c.req.path.startsWith('/api/realtime/') ? c.req.query('token') : undefined);
   if (!token) return c.json({ error: 'Unauthorized' }, 401);
   try {
-    const authorizedParties = c.env.CLERK_AUTHORIZED_PARTIES?.split(',').map((party) => party.trim()).filter(Boolean);
-    const payload = await verifyToken(token, { secretKey: c.env.CLERK_SECRET_KEY, authorizedParties: authorizedParties?.length ? authorizedParties : undefined });
+    const authorizedParties = frontendOrigins(c.env);
+    const payload = await verifyToken(token, { secretKey: c.env.CLERK_SECRET_KEY, authorizedParties: authorizedParties.length ? authorizedParties : undefined });
     c.set('userId', payload.sub);
   } catch {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -380,6 +390,7 @@ app.post('/api/todos', async (c) => {
   const { error } = await findAccessibleProject(c.env, body.project_id, userId);
   if (error) return c.json({ error: error.message }, error.status);
   if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, body.project_id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
+  if (!(await columnExistsInProject(c.env, body.column_name, body.project_id))) return c.json({ error: 'column_name must be a column of the project' }, 400);
   const now = new Date().toISOString();
   const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
@@ -403,6 +414,7 @@ app.put('/api/todos/:id', async (c) => {
   if (error) return c.json({ error: error.message }, error.status);
   if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, project.id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
   if (body.assignee_id && !(await isProjectMember(c.env, project, body.assignee_id))) return c.json({ error: 'assignee_id must be a project member' }, 400);
+  if (body.column_name !== undefined && !(await columnExistsInProject(c.env, body.column_name, project.id))) return c.json({ error: 'column_name must be a column of the project' }, 400);
   const updated = { ...todo, topic_id: body.topic_id === undefined ? (todo as TodoItem & { topic_id?: string | null }).topic_id ?? null : body.topic_id, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, topic_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.topic_id, updated.updated_at, id).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.updated', project_id: todo.project_id });
