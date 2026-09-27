@@ -45,6 +45,22 @@ const broadcast = async (env: Bindings, channel: string, event: RealtimeEvent) =
   await stub.fetch('https://realtime.internal/broadcast', { method: 'POST', body: JSON.stringify(event) });
 };
 
+// Owners also have a project_members row, but projects created before that migration may not.
+const isProjectMember = async (env: Bindings, project: Project, userId: string) =>
+  project.owner_id === userId || !!(await env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(project.id, userId).first<ProjectMember>());
+
+type ProjectAccess = { project: Project; error?: undefined } | { project?: undefined; error: { message: string; status: 403 | 404 } };
+
+const findAccessibleProject = async (env: Bindings, projectId: string, userId: string): Promise<ProjectAccess> => {
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
+  if (!project) return { error: { message: 'Project not found', status: 404 } };
+  if (!(await isProjectMember(env, project, userId))) return { error: { message: 'Forbidden', status: 403 } };
+  return { project };
+};
+
+const topicBelongsToProject = async (env: Bindings, topicId: string, projectId: string) =>
+  (await env.DB.prepare('SELECT * FROM topics WHERE id = ?').bind(topicId).first<Topic>())?.project_id === projectId;
+
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 app.use('*', cors());
 app.onError((error, c) => { console.error('Unhandled API error:', error); return c.json({ error: 'Internal server error' }, 500) });
@@ -76,11 +92,8 @@ app.get('/api/realtime/users/:userId', async (c) => {
 
 app.get('/api/realtime/projects/:projectId', async (c) => {
   const projectId = c.req.param('projectId');
-  const userId = c.get('userId');
-  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(projectId).first<Project>();
-  if (!project) return c.json({ error: 'Project not found' }, 404);
-  const member = await c.env.DB.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').bind(projectId, userId).first<ProjectMember>();
-  if (project.owner_id !== userId && !member) return c.json({ error: 'Forbidden' }, 403);
+  const { error } = await findAccessibleProject(c.env, projectId, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   if (!c.env.REALTIME) return c.json({ error: 'Realtime is not configured' }, 503);
   return c.env.REALTIME.get(c.env.REALTIME.idFromName(`project:${projectId}`)).fetch(c.req.raw);
 });
@@ -203,8 +216,9 @@ app.put('/api/users/:userId/project-order', async (c) => {
 });
 
 app.get('/api/projects/:id', async (c) => {
-  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(c.req.param('id')).first<Project>();
-  return project ? c.json(project) : c.json({ error: 'Project not found' }, 404);
+  const { project, error } = await findAccessibleProject(c.env, c.req.param('id'), c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
+  return c.json(project);
 });
 
 app.put('/api/projects/:id', async (c) => {
@@ -247,6 +261,8 @@ app.delete('/api/projects/:id', async (c) => {
 });
 
 app.get('/api/projects/:id/members', async (c) => {
+  const { error } = await findAccessibleProject(c.env, c.req.param('id'), c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const { results } = await c.env.DB.prepare(`SELECT pm.project_id, pm.user_id, pm.role, pm.created_at, pm.notified_at, u.nickname, u.avatar_color FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY pm.role DESC, u.nickname COLLATE NOCASE ASC`).bind(c.req.param('id')).all<ProjectMember & { nickname: string; avatar_color?: string }>();
   return c.json(results);
 });
@@ -298,17 +314,23 @@ app.post('/api/projects/:id/leave', async (c) => {
 });
 
 app.get('/api/projects/:projectId/columns', async (c) => {
+  const { error } = await findAccessibleProject(c.env, c.req.param('projectId'), c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const { results } = await c.env.DB.prepare('SELECT * FROM board_columns WHERE project_id = ? ORDER BY position ASC').bind(c.req.param('projectId')).all<BoardColumn>();
   return c.json(results);
 });
 
 app.get('/api/projects/:projectId/topics', async (c) => {
+  const { error } = await findAccessibleProject(c.env, c.req.param('projectId'), c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const { results } = await c.env.DB.prepare('SELECT * FROM topics WHERE project_id = ? ORDER BY created_at ASC').bind(c.req.param('projectId')).all<Topic>();
   return c.json(results);
 });
 
 app.post('/api/projects/:projectId/topics', async (c) => {
   const projectId = c.req.param('projectId');
+  const { error } = await findAccessibleProject(c.env, projectId, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const body = await c.req.json() as { name?: string; color?: string };
   const name = body.name?.trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
@@ -323,6 +345,8 @@ app.post('/api/projects/:projectId/topics', async (c) => {
 app.put('/api/topics/:id', async (c) => {
   const topic = await c.env.DB.prepare('SELECT * FROM topics WHERE id = ?').bind(c.req.param('id')).first<Topic>();
   if (!topic) return c.json({ error: 'Topic not found' }, 404);
+  const { error } = await findAccessibleProject(c.env, topic.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const color = ((await c.req.json()) as { color?: string }).color;
   if (!color || !/^#[0-9a-fA-F]{6}$/.test(color)) return c.json({ error: 'color must be a hex color' }, 400);
   const updated = { ...topic, color: color.toLowerCase(), updated_at: new Date().toISOString() };
@@ -337,6 +361,8 @@ app.put('/api/columns/:id', async (c) => {
   if (!title) return c.json({ error: 'title is required' }, 400);
   const column = await c.env.DB.prepare('SELECT * FROM board_columns WHERE id = ?').bind(id).first<BoardColumn>();
   if (!column) return c.json({ error: 'Column not found' }, 404);
+  const { error } = await findAccessibleProject(c.env, column.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const now = new Date().toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE board_columns SET title = ?, updated_at = ? WHERE id = ?').bind(title, now, id),
@@ -351,6 +377,9 @@ app.post('/api/todos', async (c) => {
   const userId = c.get('userId');
   const title = body.title?.trim();
   if (!body.project_id || !title || !body.column_name) return c.json({ error: 'project_id, title and column_name are required' }, 400);
+  const { error } = await findAccessibleProject(c.env, body.project_id, userId);
+  if (error) return c.json({ error: error.message }, error.status);
+  if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, body.project_id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
   const now = new Date().toISOString();
   const todo: TodoItem & { topic_id: string | null } = { id: uuidv4(), project_id: body.project_id, topic_id: body.topic_id || null, title, description: body.description?.trim() || null, status: 'not_started', column_name: body.column_name, user_id: userId, assignee_id: userId, created_at: now, updated_at: now };
   await c.env.DB.prepare('INSERT INTO todos (id, project_id, topic_id, title, description, status, column_name, user_id, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(todo.id, todo.project_id, todo.topic_id, todo.title, todo.description, todo.status, todo.column_name, todo.user_id, todo.assignee_id, todo.created_at, todo.updated_at).run();
@@ -359,6 +388,8 @@ app.post('/api/todos', async (c) => {
 });
 
 app.get('/api/projects/:projectId/todos', async (c) => {
+  const { error } = await findAccessibleProject(c.env, c.req.param('projectId'), c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const { results } = await c.env.DB.prepare('SELECT * FROM todos WHERE project_id = ? ORDER BY created_at ASC').bind(c.req.param('projectId')).all<TodoItem>();
   return c.json(results);
 });
@@ -368,6 +399,10 @@ app.put('/api/todos/:id', async (c) => {
   const body = await c.req.json() as Partial<Pick<TodoItem, 'title' | 'description' | 'status' | 'column_name' | 'assignee_id'>> & { topic_id?: string | null };
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
+  const { project, error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
+  if (body.topic_id && !(await topicBelongsToProject(c.env, body.topic_id, project.id))) return c.json({ error: 'topic_id must belong to the project' }, 400);
+  if (body.assignee_id && !(await isProjectMember(c.env, project, body.assignee_id))) return c.json({ error: 'assignee_id must be a project member' }, 400);
   const updated = { ...todo, topic_id: body.topic_id === undefined ? (todo as TodoItem & { topic_id?: string | null }).topic_id ?? null : body.topic_id, title: body.title?.trim() || todo.title, description: body.description === undefined ? todo.description : body.description?.trim() || null, status: body.status ?? todo.status, column_name: body.column_name ?? todo.column_name, assignee_id: body.assignee_id === undefined ? todo.assignee_id : body.assignee_id, updated_at: new Date().toISOString() };
   await c.env.DB.prepare('UPDATE todos SET title = ?, description = ?, status = ?, column_name = ?, assignee_id = ?, topic_id = ?, updated_at = ? WHERE id = ?').bind(updated.title, updated.description, updated.status, updated.column_name, updated.assignee_id, updated.topic_id, updated.updated_at, id).run();
   await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.updated', project_id: todo.project_id });
@@ -375,6 +410,10 @@ app.put('/api/todos/:id', async (c) => {
 });
 
 app.get('/api/todos/:id/comments', async (c) => {
+  const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(c.req.param('id')).first<TodoItem>();
+  if (!todo) return c.json({ error: 'Todo not found' }, 404);
+  const { error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const { results } = await c.env.DB.prepare('SELECT c.*, u.nickname FROM todo_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.todo_id = ? ORDER BY c.created_at ASC').bind(c.req.param('id')).all<TodoComment & { nickname: string | null }>();
   return c.json(results);
 });
@@ -386,6 +425,8 @@ app.post('/api/todos/:id/comments', async (c) => {
   if (!commentBody) return c.json({ error: 'body is required' }, 400);
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(todoId).first<TodoItem>();
   if (!todo) return c.json({ error: 'Todo not found' }, 404);
+  const { error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
   const comment: TodoComment = { id: uuidv4(), todo_id: todoId, user_id: c.get('userId'), body: commentBody, created_at: new Date().toISOString() };
   await c.env.DB.prepare('INSERT INTO todo_comments (id, todo_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)').bind(comment.id, comment.todo_id, comment.user_id, comment.body, comment.created_at).run();
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(comment.user_id).first<UserAccount>();
@@ -396,10 +437,15 @@ app.post('/api/todos/:id/comments', async (c) => {
 app.delete('/api/todos/:id', async (c) => {
   const id = c.req.param('id');
   const todo = await c.env.DB.prepare('SELECT * FROM todos WHERE id = ?').bind(id).first<TodoItem>();
-  await c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id = ?').bind(id).run();
-  const result = await c.env.DB.prepare('DELETE FROM todos WHERE id = ?').bind(id).run();
-  if (result.meta.changes && todo) await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.deleted', project_id: todo.project_id });
-  return result.meta.changes ? c.json({ success: true }) : c.json({ error: 'Todo not found' }, 404);
+  if (!todo) return c.json({ error: 'Todo not found' }, 404);
+  const { error } = await findAccessibleProject(c.env, todo.project_id, c.get('userId'));
+  if (error) return c.json({ error: error.message }, error.status);
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM todo_comments WHERE todo_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM todos WHERE id = ?').bind(id),
+  ]);
+  await broadcast(c.env, `project:${todo.project_id}`, { type: 'todo.deleted', project_id: todo.project_id });
+  return c.json({ success: true });
 });
 
 export default app;

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskDetailModal from './TaskDetailModal'
@@ -58,6 +58,15 @@ describe('TaskDetailModal', () => {
     await user.click(screen.getByRole('button', { name: '追加' }))
     expect(await screen.findByText('確認しました')).toBeInTheDocument()
     expect(mockedApi.createTodoComment).toHaveBeenCalledWith(todo.id, '確認しました')
+  })
+
+  it('担当者の選択肢をプロジェクトメンバーに限定する', async () => {
+    const members = [{ project_id: todo.project_id, user_id: 'user-1', role: 'owner' as const, nickname: '山田' }]
+    render(<TaskDetailModal todo={todo} members={members} userId="user-1" nickname="山田" onClose={vi.fn()} onUpdated={vi.fn()} />)
+
+    const assignee = screen.getByRole('combobox', { name: '担当者' })
+    await waitFor(() => expect(mockedApi.getUsers).toHaveBeenCalled())
+    expect(within(assignee).getAllByRole('option').map((option) => option.textContent)).toEqual(['未割り当て', '山田'])
   })
 
   it('タスクの所属トピックを変更する', async () => {

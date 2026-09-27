@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient, type TodoComment, type TodoItem, type Topic, type UserAccount } from '../services/api'
+import { apiClient, type ProjectMember, type TodoComment, type TodoItem, type Topic, type UserAccount } from '../services/api'
 import './TaskDetailModal.css'
 
 interface TaskDetailModalProps {
@@ -7,12 +7,13 @@ interface TaskDetailModalProps {
   userId: string
   nickname: string
   topics?: Topic[]
+  members?: ProjectMember[]
   refreshToken?: number
   onClose: () => void
   onUpdated: (todo: TodoItem) => void
 }
 
-export default function TaskDetailModal({ todo, userId, nickname, topics = [], refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
+export default function TaskDetailModal({ todo, userId, nickname, topics = [], members = [], refreshToken = 0, onClose, onUpdated }: TaskDetailModalProps) {
   const [users, setUsers] = useState<UserAccount[]>([])
   const [comments, setComments] = useState<TodoComment[]>([])
   const [title, setTitle] = useState(todo.title)
@@ -38,6 +39,13 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], r
 
   const userNames = useMemo(() => new Map(users.map((user) => [user.id, user.nickname])), [users])
   const creatorName = userNames.get(todo.user_id) ?? (todo.user_id === userId ? nickname : '不明なユーザー')
+  // Only project members can be assigned; keep a former member visible while they are still the assignee.
+  const assigneeOptions = useMemo(() => {
+    const options = members.length ? members.map((member) => ({ id: member.user_id, nickname: member.nickname })) : users
+    return todo.assignee_id && !options.some((option) => option.id === todo.assignee_id)
+      ? [...options, { id: todo.assignee_id, nickname: userNames.get(todo.assignee_id) ?? '不明なユーザー' }]
+      : options
+  }, [members, todo.assignee_id, userNames, users])
 
   const updateTodo = async (updates: Partial<TodoItem>, success: (updated: TodoItem) => void) => {
     setIsSaving(true)
@@ -108,7 +116,7 @@ export default function TaskDetailModal({ todo, userId, nickname, topics = [], r
 
           <aside>
             <h3>詳細</h3>
-            <dl><div><dt>担当者</dt><dd><select aria-label="担当者" value={todo.assignee_id ?? ''} onChange={(event) => changeAssignee(event.target.value)} disabled={isSaving}><option value="">未割り当て</option>{users.map((user) => <option key={user.id} value={user.id}>{user.nickname}</option>)}</select></dd></div><div><dt>作成者</dt><dd><span className="detail-avatar">{Array.from(creatorName)[0]}</span>{creatorName}</dd></div><div><dt>状態</dt><dd>{todo.column_name}</dd></div><div><dt>作成日</dt><dd>{new Date(todo.created_at).toLocaleDateString('ja-JP')}</dd></div></dl>
+            <dl><div><dt>担当者</dt><dd><select aria-label="担当者" value={todo.assignee_id ?? ''} onChange={(event) => changeAssignee(event.target.value)} disabled={isSaving}><option value="">未割り当て</option>{assigneeOptions.map((user) => <option key={user.id} value={user.id}>{user.nickname}</option>)}</select></dd></div><div><dt>作成者</dt><dd><span className="detail-avatar">{Array.from(creatorName)[0]}</span>{creatorName}</dd></div><div><dt>状態</dt><dd>{todo.column_name}</dd></div><div><dt>作成日</dt><dd>{new Date(todo.created_at).toLocaleDateString('ja-JP')}</dd></div></dl>
           </aside>
         </div>
       </section>

@@ -218,6 +218,11 @@ describe('Team Todo API', () => {
   let realtime: MemoryRealtime
   let environment: { DB: D1Database; ENVIRONMENT: string; REALTIME: DurableObjectNamespace; CLERK_SECRET_KEY: string }
 
+  const createProject = async (name = 'テストプロジェクト', ownerId = 'user-1') => {
+    const response = await app.request('/api/projects', jsonRequest({ name }, 'POST', ownerId), environment)
+    return await response.json() as { id: string }
+  }
+
   beforeEach(() => {
     database = new MemoryD1()
     realtime = new MemoryRealtime()
@@ -314,7 +319,8 @@ describe('Team Todo API', () => {
   })
 
   it('タスクを作成し、状態を変更して削除する', async () => {
-    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', title: 'テストを書く', column_name: 'To Do', user_id: 'spoofed-user' }), environment)
+    const project = await createProject()
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'テストを書く', column_name: 'To Do', user_id: 'spoofed-user' }), environment)
     const created = await createResponse.json() as { id: string; user_id: string; assignee_id: string }
 
     expect(createResponse.status).toBe(201)
@@ -329,7 +335,8 @@ describe('Team Todo API', () => {
   })
 
   it('タスク名を更新する', async () => {
-    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', title: '変更前タスク', column_name: 'To Do' }), environment)
+    const project = await createProject()
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '変更前タスク', column_name: 'To Do' }), environment)
     const created = await createResponse.json() as { id: string }
 
     const response = await app.request(`/api/todos/${created.id}`, jsonRequest({ title: '  変更後タスク  ' }, 'PUT'), environment)
@@ -340,13 +347,14 @@ describe('Team Todo API', () => {
   })
 
   it('トピックを作成し、タスクの所属トピックを設定する', async () => {
-    const topicResponse = await app.request('/api/projects/project-1/topics', jsonRequest({ name: 'フロントエンド' }), environment)
+    const project = await createProject()
+    const topicResponse = await app.request(`/api/projects/${project.id}/topics`, jsonRequest({ name: 'フロントエンド' }), environment)
     const topic = await topicResponse.json() as { id: string }
     expect(topicResponse.status).toBe(201)
     const colorResponse = await app.request(`/api/topics/${topic.id}`, jsonRequest({ color: '#336699' }, 'PUT'), environment)
     expect(await colorResponse.json()).toMatchObject({ color: '#336699' })
 
-    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', topic_id: topic.id, title: '画面を作る', column_name: 'To Do' }), environment)
+    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, topic_id: topic.id, title: '画面を作る', column_name: 'To Do' }), environment)
     const todo = await todoResponse.json() as { id: string; topic_id: string }
     expect(todo.topic_id).toBe(topic.id)
 
@@ -356,7 +364,9 @@ describe('Team Todo API', () => {
 
   it('タスクの説明・担当者・コメントを保存する', async () => {
     database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'user-2', nickname: '佐藤' })
-    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: 'project-1', title: '詳細タスク', column_name: 'To Do' }), environment)
+    const project = await createProject()
+    await app.request(`/api/projects/${project.id}/members`, jsonRequest({ user_id: 'user-2' }), environment)
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '詳細タスク', column_name: 'To Do' }), environment)
     const created = await createResponse.json() as { id: string }
 
     const updateResponse = await app.request(`/api/todos/${created.id}`, jsonRequest({ description: '詳細な説明', assignee_id: 'user-2' }, 'PUT'), environment)
@@ -368,6 +378,55 @@ describe('Team Todo API', () => {
 
     const listResponse = await app.request(`/api/todos/${created.id}/comments`, request(), environment)
     expect(await listResponse.json()).toEqual([expect.objectContaining({ body: '確認しました' })])
+  })
+
+  it('メンバー以外によるプロジェクト配下のデータの閲覧・変更を拒否する', async () => {
+    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'outsider', nickname: '部外者' })
+    const project = await createProject()
+    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: '機密タスク', column_name: 'To Do' }), environment)
+    const todo = await todoResponse.json() as { id: string }
+    const topicResponse = await app.request(`/api/projects/${project.id}/topics`, jsonRequest({ name: '機密トピック' }), environment)
+    const topic = await topicResponse.json() as { id: string }
+    const column = database.columns[0]
+
+    const attempts: Array<[string, RequestInit]> = [
+      [`/api/projects/${project.id}`, request('GET', 'outsider')],
+      [`/api/projects/${project.id}/members`, request('GET', 'outsider')],
+      [`/api/projects/${project.id}/columns`, request('GET', 'outsider')],
+      [`/api/projects/${project.id}/topics`, request('GET', 'outsider')],
+      [`/api/projects/${project.id}/topics`, jsonRequest({ name: '侵入' }, 'POST', 'outsider')],
+      [`/api/projects/${project.id}/todos`, request('GET', 'outsider')],
+      ['/api/todos', jsonRequest({ project_id: project.id, title: '侵入', column_name: 'To Do' }, 'POST', 'outsider')],
+      [`/api/todos/${todo.id}`, jsonRequest({ title: '改ざん' }, 'PUT', 'outsider')],
+      [`/api/todos/${todo.id}/comments`, request('GET', 'outsider')],
+      [`/api/todos/${todo.id}/comments`, jsonRequest({ body: '侵入' }, 'POST', 'outsider')],
+      [`/api/todos/${todo.id}`, request('DELETE', 'outsider')],
+      [`/api/topics/${topic.id}`, jsonRequest({ color: '#000000' }, 'PUT', 'outsider')],
+      [`/api/columns/${column.id}`, jsonRequest({ title: '改ざん' }, 'PUT', 'outsider')],
+    ]
+    for (const [path, init] of attempts) {
+      expect((await app.request(path, init, environment)).status, path).toBe(403)
+    }
+    expect(database.todos).toEqual([expect.objectContaining({ id: todo.id, title: '機密タスク' })])
+    expect(database.topics).toHaveLength(1)
+    expect(database.comments).toHaveLength(0)
+    expect(column.title).toBe('To Do')
+  })
+
+  it('別プロジェクトのトピックやメンバー以外の担当者を拒否する', async () => {
+    database.users.push({ id: 'user-1', nickname: '山田' }, { id: 'outsider', nickname: '部外者' })
+    const project = await createProject()
+    const otherProject = await createProject('別プロジェクト', 'outsider')
+    const otherTopicResponse = await app.request(`/api/projects/${otherProject.id}/topics`, jsonRequest({ name: '他所のトピック' }, 'POST', 'outsider'), environment)
+    const otherTopic = await otherTopicResponse.json() as { id: string }
+
+    const createResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, topic_id: otherTopic.id, title: 'タスク', column_name: 'To Do' }), environment)
+    expect(createResponse.status).toBe(400)
+    const todoResponse = await app.request('/api/todos', jsonRequest({ project_id: project.id, title: 'タスク', column_name: 'To Do' }), environment)
+    const todo = await todoResponse.json() as { id: string }
+    expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ topic_id: otherTopic.id }, 'PUT'), environment)).status).toBe(400)
+    expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ assignee_id: 'outsider' }, 'PUT'), environment)).status).toBe(400)
+    expect((await app.request(`/api/todos/${todo.id}`, jsonRequest({ assignee_id: null }, 'PUT'), environment)).status).toBe(200)
   })
 
   it('プロジェクト削除時に関連データも削除し、再実行も成功する', async () => {

@@ -14,7 +14,7 @@ function App() {
   useLayoutEffect(() => { apiClient.setTokenProvider(() => getToken()) }, [getToken])
 
   if (!isLoaded) return <div className="auth-screen"><div className="board-loading"><span/><p>読み込んでいます…</p></div></div>
-  if (!isSignedIn || !userId) return <div className="auth-screen"><SignIn /></div>
+  if (!isSignedIn || !userId) return <div className="auth-screen"><SignIn withSignUp /></div>
   return <Workspace key={userId} userId={userId} />
 }
 
